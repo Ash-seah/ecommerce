@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-temporary-sandbox-objects",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "sandboxes/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}
