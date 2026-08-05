@@ -95,6 +95,18 @@ async def test_request_ids_security_headers_and_structured_safe_log(
 
 
 @pytest.mark.asyncio
+async def test_docs_csp_allows_swagger_cdn(client: httpx.AsyncClient) -> None:
+    docs = await client.get("/docs")
+    assert docs.status_code == 200
+    policy = docs.headers["content-security-policy"]
+    assert "cdn.jsdelivr.net" in policy
+    assert "unsafe-inline" in policy
+
+    live = await client.get("/health/live")
+    assert live.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+
+
+@pytest.mark.asyncio
 async def test_problem_details_validation_unhandled_and_body_limit(
     client: httpx.AsyncClient,
 ) -> None:

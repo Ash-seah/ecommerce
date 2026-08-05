@@ -43,11 +43,30 @@ def _route(request: Request) -> str:
     return path if isinstance(path, str) else "unmatched"
 
 
-def _security_headers(response: Response) -> None:
+_DOCS_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
+
+
+def _security_headers(request: Request, response: Response) -> None:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    # Swagger/ReDoc load CDN assets and an inline bootstrap script.
+    if request.url.path in _DOCS_PATHS or request.url.path.startswith(("/docs/", "/redoc/")):
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            (
+                "default-src 'none'; "
+                "base-uri 'none'; "
+                "frame-ancestors 'none'; "
+                "img-src 'self' data: https://fastapi.tiangolo.com; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "connect-src 'self'; "
+                "font-src 'self' data: https://cdn.jsdelivr.net"
+            ),
+        )
+        return
     response.headers.setdefault(
         "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
     )
@@ -176,7 +195,7 @@ class RequestMiddleware(BaseHTTPMiddleware):
         duration = time.perf_counter() - started
         route = _route(request)
         response.headers["X-Request-ID"] = request_id
-        _security_headers(response)
+        _security_headers(request, response)
         REQUESTS.labels(request.method, route, str(response.status_code)).inc()
         LATENCY.labels(request.method, route).observe(duration)
         _logger.info(
