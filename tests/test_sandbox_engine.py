@@ -302,3 +302,34 @@ async def test_cookie_flags_origin_bound_csrf_and_rotation() -> None:
             headers={"Origin": "https://client.test", "X-CSRF-Token": token},
         )
         assert rejected_old.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_swagger_can_omit_origin_when_host_matches_cors() -> None:
+    service, _redis, secrets, _master = await service_fixture()
+    settings = get_settings().model_copy(
+        update={"cors_origins": [AnyHttpUrl("https://client.test")]}
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    app.state.session_secrets = secrets
+    app.state.sandbox_service = service
+    app.include_router(router)
+
+    @app.exception_handler(SandboxAPIError)
+    async def handler(_request: Request, exc: SandboxAPIError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://client.test") as client:
+        created = await client.get("/v1/sandbox/session/create")
+        assert created.status_code == 200
+        token = created.json()["csrf_token"]
+        refreshed = await client.post(
+            "/v1/sandbox/session/refresh",
+            headers={"X-CSRF-Token": token},
+        )
+        assert refreshed.status_code == 200

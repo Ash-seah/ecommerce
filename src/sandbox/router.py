@@ -1,6 +1,7 @@
 """Thin v1 HTTP surface for sandbox lifecycle operations."""
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Header, Request, Response
 from pydantic import BaseModel, ConfigDict
@@ -55,16 +56,52 @@ def _secrets(request: Request) -> SessionSecrets:
     return secrets
 
 
+def _allowed_origins(request: Request) -> list[str]:
+    return [normalize_origin(str(item)) for item in _settings(request).cors_origins]
+
+
+def _origin_from_host(request: Request, allowed: list[str]) -> str | None:
+    """Resolve CSRF origin for Swagger/curl when the Origin header is omitted."""
+    host_header = request.headers.get("host")
+    if host_header is None:
+        return None
+    host = host_header.split(",", 1)[0].strip().lower()
+    hostname = host.split(":", 1)[0]
+    matches = [
+        origin
+        for origin in allowed
+        if (urlsplit(origin).hostname or "").lower() == hostname
+        or urlsplit(origin).netloc.lower() == host
+    ]
+    if not matches:
+        return None
+    https = [origin for origin in matches if origin.startswith("https://")]
+    return (https or matches)[0]
+
+
 def _request_origin(request: Request) -> str:
+    allowed = _allowed_origins(request)
     value = request.headers.get("origin")
     if value is None:
-        raise SandboxAPIError(400, "origin_required", "Origin header is required")
+        referer = request.headers.get("referer")
+        if referer:
+            parts = urlsplit(referer)
+            if parts.scheme in {"http", "https"} and parts.hostname:
+                value = f"{parts.scheme}://{parts.netloc}"
+    if value is None:
+        inferred = _origin_from_host(request, allowed)
+        if inferred is None:
+            raise SandboxAPIError(
+                400,
+                "origin_required",
+                "Origin header is required unless Host matches an allowed CORS origin",
+            )
+        return inferred
     try:
         origin = normalize_origin(value)
     except InvalidOriginError as exc:
         raise SandboxAPIError(400, "invalid_origin", str(exc)) from exc
-    allowed = {normalize_origin(str(item)) for item in _settings(request).cors_origins}
-    if origin not in allowed:
+    if origin not in set(allowed):
         raise SandboxAPIError(403, "origin_denied", "Origin is not allowed")
     return origin
 
