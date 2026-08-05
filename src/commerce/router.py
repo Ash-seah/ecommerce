@@ -1,6 +1,7 @@
 """Thin FastAPI v1 routers for commerce domain services."""
 
-from typing import Annotated, Literal
+from collections.abc import Awaitable
+from typing import Annotated, Literal, TypeVar
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, Query, Request
@@ -26,6 +27,9 @@ from src.commerce.schemas import (
 from src.commerce.service import CommerceError, CommerceService
 from src.sandbox.models import AddressRecord, OrderRecord
 from src.sandbox.router import SessionContext, _existing_context, _require_csrf
+from src.sandbox.service import CatalogUnavailableError
+
+_T = TypeVar("_T")
 
 router = APIRouter(prefix="/v1", tags=["commerce"])
 Page = Annotated[int, Query(ge=1)]
@@ -48,20 +52,29 @@ async def _write_context(request: Request, x_csrf_token: str | None) -> SessionC
     return await _require_csrf(request, x_csrf_token)
 
 
+async def _catalog_call(operation: Awaitable[_T]) -> _T:
+    try:
+        return await operation
+    except CatalogUnavailableError as exc:
+        raise CommerceError(503, "catalog_unavailable", str(exc)) from exc
+
+
 @router.get("/catalog/categories", response_model=CategoryPage)
 async def list_categories(
     request: Request, page: Page = 1, page_size: PageSize = 20
 ) -> CategoryPage:
     context = await _existing_context(request)
-    return await _service(request).categories(
-        context.session_id, page, _bounded_page_size(request, page_size)
+    return await _catalog_call(
+        _service(request).categories(
+            context.session_id, page, _bounded_page_size(request, page_size)
+        )
     )
 
 
 @router.get("/catalog/categories/{identifier}", response_model=CategorySnapshot)
 async def get_category(request: Request, identifier: str) -> CategorySnapshot:
     context = await _existing_context(request)
-    return await _service(request).category(context.session_id, identifier)
+    return await _catalog_call(_service(request).category(context.session_id, identifier))
 
 
 @router.get("/catalog/products", response_model=ProductPage)
@@ -83,23 +96,25 @@ async def list_products(
     ):
         raise CommerceError(422, "invalid_price_range", "Minimum price exceeds maximum")
     context = await _existing_context(request)
-    return await _service(request).products(
-        context.session_id,
-        page=page,
-        page_size=_bounded_page_size(request, page_size),
-        search=search,
-        category=category,
-        min_price_minor=min_price_minor,
-        max_price_minor=max_price_minor,
-        available=available,
-        sort=sort,
+    return await _catalog_call(
+        _service(request).products(
+            context.session_id,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+            search=search,
+            category=category,
+            min_price_minor=min_price_minor,
+            max_price_minor=max_price_minor,
+            available=available,
+            sort=sort,
+        )
     )
 
 
 @router.get("/catalog/products/{identifier}", response_model=ProductView)
 async def get_product(request: Request, identifier: str) -> ProductView:
     context = await _existing_context(request)
-    return await _service(request).product(context.session_id, identifier)
+    return await _catalog_call(_service(request).product(context.session_id, identifier))
 
 
 @router.get("/cart", response_model=CartView)
@@ -116,31 +131,33 @@ async def add_cart_item(
 ) -> CartView:
     context = await _write_context(request, x_csrf_token)
     return await _service(request).change_cart(
-        context.session_id, body.sku, body.quantity, add=True
+        context.session_id, body.variant_id, body.quantity, add=True
     )
 
 
-@router.put("/cart/items/{sku}", response_model=CartView)
+@router.put("/cart/items/{variant_id}", response_model=CartView)
 async def set_cart_item(
-    sku: str,
+    variant_id: UUID,
     body: CartQuantityRequest,
     request: Request,
     x_csrf_token: str | None = Header(default=None),
 ) -> CartView:
-    if body.sku != sku:
-        raise CommerceError(422, "sku_mismatch", "Path and body SKU must match")
+    if body.variant_id != variant_id:
+        raise CommerceError(422, "variant_mismatch", "Path and body variant_id must match")
     context = await _write_context(request, x_csrf_token)
-    return await _service(request).change_cart(context.session_id, sku, body.quantity, add=False)
+    return await _service(request).change_cart(
+        context.session_id, variant_id, body.quantity, add=False
+    )
 
 
-@router.delete("/cart/items/{sku}", response_model=CartView)
+@router.delete("/cart/items/{variant_id}", response_model=CartView)
 async def remove_cart_item(
-    sku: str,
+    variant_id: UUID,
     request: Request,
     x_csrf_token: str | None = Header(default=None),
 ) -> CartView:
     context = await _write_context(request, x_csrf_token)
-    return await _service(request).remove_cart(context.session_id, sku)
+    return await _service(request).remove_cart(context.session_id, variant_id)
 
 
 @router.delete("/cart", response_model=CartView)

@@ -66,7 +66,7 @@ async def test_tombstones_restore_and_restore_all_preserve_commerce_state() -> N
     restored_state, restored = await admin.restore_product(session_id, product.id)
     assert restored.name == product.name
     assert product.id not in restored_state.product_tombstones
-    await commerce_service.change_cart(session_id, variant.sku, 1, add=False)
+    await commerce_service.change_cart(session_id, variant.id, 1, add=False)
     await commerce_service.adjust_wallet(session_id, 500, "preserved credit", operation="credit")
 
     await admin.update_product(
@@ -91,7 +91,7 @@ async def test_tombstones_restore_and_restore_all_preserve_commerce_state() -> N
     assert reset.product_overlays == {}
     assert reset.stock_overrides == {}
     assert reset.coupons == {}
-    assert reset.cart.lines[0].sku == variant.sku
+    assert reset.cart.lines[0].variant_id == variant.id
     assert reset.wallet.balance_minor == 500
 
 
@@ -186,7 +186,7 @@ async def test_custom_coupon_changes_checkout_pricing() -> None:
     shipping = address()
     await commerce_service.put_address(session_id, shipping)
     await commerce_service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
-    await commerce_service.change_cart(session_id, master.products[0].variants[0].sku, 2, add=False)
+    await commerce_service.change_cart(session_id, master.products[0].variants[0].id, 2, add=False)
     await admin.put_coupon(
         session_id,
         CouponInput(

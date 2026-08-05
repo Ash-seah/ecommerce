@@ -92,14 +92,14 @@ async def seed() -> None:
                     sku=f"TEE-CLASSIC-{size}",
                     name=f"Classic Tee / {size}",
                     price_minor=price,
-                    currency="USD",
+                    currency="IRR",
                     is_active=True,
                 )
                 .on_conflict_do_update(
                     index_elements=[ProductVariant.id],
                     set_={
                         "price_minor": price,
-                        "currency": "USD",
+                        "currency": "IRR",
                         "is_active": True,
                         "updated_at": func.now(),
                     },

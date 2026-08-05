@@ -102,7 +102,15 @@ def install_exception_handlers(application: FastAPI) -> None:
         application.add_exception_handler(error_type, application_error_handler)
 
     @application.exception_handler(Exception)
-    async def unhandled_handler(request: Request, _exc: Exception) -> JSONResponse:
+    async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
+        import logging
+
+        logging.getLogger("ecommerce.errors").exception(
+            "unhandled_exception request_id=%s path=%s",
+            getattr(request.state, "request_id", "unknown"),
+            request.url.path,
+            exc_info=exc,
+        )
         return problem(
             request,
             status=500,

@@ -54,7 +54,7 @@ async def test_cache_refresh_publishes_revision_and_round_trips() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cache_miss_does_not_query_database() -> None:
+async def test_current_pointer_miss_rehydrates_from_database() -> None:
     snapshot = CatalogSnapshot(
         revision_id=uuid4(),
         revision_number=1,
@@ -66,5 +66,25 @@ async def test_cache_miss_does_not_query_database() -> None:
     repository = FakeRepository(snapshot)
     cache = CatalogSnapshotCache(FakeBackend(), repository, key_prefix="test")
 
-    assert await cache.get() is None
-    assert repository.calls == 0
+    assert await cache.get() == snapshot
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_revision_cache_miss_rehydrates_from_database() -> None:
+    snapshot = CatalogSnapshot(
+        revision_id=uuid4(),
+        revision_number=3,
+        revision_label="v3",
+        generated_at=datetime.now(UTC),
+        categories=(),
+        products=(),
+    )
+    repository = FakeRepository(snapshot)
+    cache = CatalogSnapshotCache(FakeBackend(), repository, key_prefix="test")
+
+    loaded = await cache.get_revision(3)
+    assert loaded == snapshot
+    assert repository.calls == 1
+    assert await cache.get_revision(3) == snapshot
+    assert repository.calls == 1

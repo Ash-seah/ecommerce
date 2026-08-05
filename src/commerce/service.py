@@ -158,19 +158,16 @@ class CommerceService:
     @staticmethod
     def _variants(
         catalog: CatalogSnapshot,
-    ) -> tuple[
-        dict[str, tuple[ProductSnapshot, VariantSnapshot]],
-        dict[UUID, tuple[ProductSnapshot, VariantSnapshot]],
-    ]:
-        by_sku: dict[str, tuple[ProductSnapshot, VariantSnapshot]] = {}
+    ) -> dict[UUID, tuple[ProductSnapshot, VariantSnapshot]]:
         by_id: dict[UUID, tuple[ProductSnapshot, VariantSnapshot]] = {}
         for product in catalog.products:
             for variant in product.variants:
-                if variant.sku in by_sku:
-                    raise CommerceError(409, "duplicate_sku", "Catalog contains duplicate SKUs")
-                by_sku[variant.sku] = (product, variant)
+                if variant.id in by_id:
+                    raise CommerceError(
+                        409, "duplicate_variant", "Catalog contains duplicate variant IDs"
+                    )
                 by_id[variant.id] = (product, variant)
-        return by_sku, by_id
+        return by_id
 
     def _stock(self, state: SandboxState, variant_id: UUID) -> int:
         return state.stock_overrides.get(variant_id, self._limits.default_stock)
@@ -284,11 +281,11 @@ class CommerceService:
     def _resolved_cart(
         self, state: SandboxState, catalog: CatalogSnapshot
     ) -> tuple[list[tuple[ProductSnapshot, VariantSnapshot, int]], str]:
-        by_sku, by_id = self._variants(catalog)
+        by_id = self._variants(catalog)
         resolved: list[tuple[ProductSnapshot, VariantSnapshot, int]] = []
         currencies: set[str] = set()
         for line in state.cart.lines:
-            item = by_sku.get(line.sku) if line.sku is not None else by_id.get(line.variant_id)
+            item = by_id.get(line.variant_id)
             if item is None:
                 raise CommerceError(409, "cart_item_unavailable", "A cart item is unavailable")
             product, variant = item
@@ -303,7 +300,6 @@ class CommerceService:
         lines = tuple(
             CartLineView(
                 variant_id=variant.id,
-                sku=variant.sku,
                 product_name=product.name,
                 variant_name=variant.name,
                 quantity=quantity,
@@ -328,7 +324,7 @@ class CommerceService:
     async def change_cart(
         self,
         session_id: str,
-        sku: str,
+        variant_id: UUID,
         quantity: int,
         *,
         add: bool,
@@ -338,17 +334,16 @@ class CommerceService:
 
         def mutation(state: SandboxState) -> SandboxState:
             catalog = merge_catalog(master, state)
-            by_sku, _by_id = self._variants(catalog)
-            item = by_sku.get(sku)
+            item = self._variants(catalog).get(variant_id)
             if item is None:
-                raise CommerceError(404, "sku_not_found", "SKU was not found")
+                raise CommerceError(404, "variant_not_found", "Variant was not found")
             _product, variant = item
             lines = list(state.cart.lines)
             index = next(
                 (
                     position
                     for position, line in enumerate(lines)
-                    if line.sku == sku or line.variant_id == variant.id
+                    if line.variant_id == variant.id
                 ),
                 None,
             )
@@ -358,7 +353,7 @@ class CommerceService:
                 raise CommerceError(422, "quantity_too_large", "Quantity exceeds cart limit")
             if target > self._stock(state, variant.id):
                 raise CommerceError(409, "insufficient_stock", "Requested quantity exceeds stock")
-            replacement = CartLine(variant_id=variant.id, sku=sku, quantity=target)
+            replacement = CartLine(variant_id=variant.id, quantity=target)
             if index is None:
                 lines.append(replacement)
             else:
@@ -368,20 +363,12 @@ class CommerceService:
         state = await self._sandbox.mutate(session_id, mutation)
         return self._cart_view(state, merge_catalog(master, state))
 
-    async def remove_cart(self, session_id: str, sku: str) -> CartView:
+    async def remove_cart(self, session_id: str, variant_id: UUID) -> CartView:
         initial = await self._sandbox.inspect(session_id)
         master = await self._sandbox.master_catalog(initial.pinned_master_revision)
 
         def mutation(state: SandboxState) -> SandboxState:
-            catalog = merge_catalog(master, state)
-            by_sku, _by_id = self._variants(catalog)
-            item = by_sku.get(sku)
-            variant_id = item[1].id if item else None
-            lines = [
-                line
-                for line in state.cart.lines
-                if line.sku != sku and (variant_id is None or line.variant_id != variant_id)
-            ]
+            lines = [line for line in state.cart.lines if line.variant_id != variant_id]
             if len(lines) == len(state.cart.lines):
                 raise CommerceError(404, "cart_item_not_found", "Cart item was not found")
             return state.model_copy(update={"cart": state.cart.model_copy(update={"lines": lines})})

@@ -34,7 +34,8 @@ class CatalogSnapshotCache:
     async def get(self) -> CatalogSnapshot | None:
         revision = await self._backend.get(self._current_key)
         if revision is None:
-            return None
+            # Cold Redis: publish the active Postgres revision once.
+            return await self.refresh()
         if isinstance(revision, bytes):
             revision = revision.decode("ascii")
         if not revision.isdecimal():
@@ -42,11 +43,15 @@ class CatalogSnapshotCache:
         return await self.get_revision(int(revision))
 
     async def get_revision(self, revision_number: int) -> CatalogSnapshot | None:
-        """Read an immutable revision without falling through to PostgreSQL."""
+        """Return a revision from Redis, rehydrating from Postgres on cache miss."""
         payload = await self._backend.get(self.snapshot_key(revision_number))
-        if payload is None:
-            return None
-        return CatalogSnapshot.model_validate_json(payload)
+        if payload is not None:
+            return CatalogSnapshot.model_validate_json(payload)
+        # Redis may have been flushed while sandboxes still pin a revision.
+        snapshot = await self.refresh()
+        if snapshot.revision_number == revision_number:
+            return snapshot
+        return None
 
     async def refresh(self) -> CatalogSnapshot:
         snapshot = await self._repository.get_active_snapshot()

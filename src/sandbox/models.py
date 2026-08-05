@@ -59,7 +59,6 @@ class CouponRecord(SandboxModel):
 
 class CartLine(SandboxModel):
     variant_id: UUID
-    sku: str | None = Field(default=None, min_length=1, max_length=80)
     quantity: Annotated[int, Field(gt=0)]
 
 

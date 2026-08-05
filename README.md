@@ -171,7 +171,7 @@ curl -sS -c cookies.txt -H "Origin: $ORIGIN" \
 CSRF=$(jq -r .csrf_token session.json)
 curl -sS -b cookies.txt -H "Origin: $ORIGIN" -H "X-CSRF-Token: $CSRF" \
   -H "Content-Type: application/json" \
-  -d '{"sku":"TEE-CLASSIC-M","quantity":1}' \
+  -d '{"variant_id":"REPLACE-WITH-VARIANT-UUID","quantity":1}' \
   http://localhost:8001/v1/cart/items
 curl -sS -b cookies.txt -H "Origin: $ORIGIN" -H "X-CSRF-Token: $CSRF" \
   -H "Idempotency-Key: demo-checkout-001" -H "Content-Type: application/json" \
@@ -188,7 +188,8 @@ $created = Invoke-RestMethod -WebSession $session -Headers @{ Origin = $origin }
   http://localhost:8001/v1/sandbox/session/create
 $headers = @{ Origin = $origin; 'X-CSRF-Token' = $created.csrf_token }
 Invoke-RestMethod -Method Post -WebSession $session -Headers $headers `
-  -ContentType 'application/json' -Body '{"sku":"TEE-CLASSIC-M","quantity":1}' `
+  -ContentType 'application/json' `
+  -Body '{"variant_id":"REPLACE-WITH-VARIANT-UUID","quantity":1}' `
   http://localhost:8001/v1/cart/items
 $headers['Idempotency-Key'] = 'demo-checkout-001'
 Invoke-RestMethod -Method Post -WebSession $session -Headers $headers `

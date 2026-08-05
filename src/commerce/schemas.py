@@ -56,20 +56,26 @@ class ProductPage(CommerceModel):
     pages: Minor
 
 
-class CartQuantityRequest(CommerceModel):
+class CartQuantityRequest(BaseModel):
+    # Non-strict so JSON string UUIDs coerce; cart identity is variant_id only.
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
-        json_schema_extra={"examples": [{"sku": "TEE-CLASSIC-M", "quantity": 2}]},
+        json_schema_extra={
+            "examples": [
+                {
+                    "variant_id": "00000000-0000-4000-8000-0000000000aa",
+                    "quantity": 2,
+                }
+            ]
+        },
     )
 
-    sku: str = Field(min_length=1, max_length=80)
+    variant_id: UUID
     quantity: int = Field(ge=1)
 
 
 class CartLineView(CommerceModel):
     variant_id: UUID
-    sku: str
     product_name: str
     variant_name: str
     quantity: int

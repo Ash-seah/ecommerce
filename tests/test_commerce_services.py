@@ -97,19 +97,19 @@ async def test_cart_isolation_server_prices_quantities_and_conflict_retry() -> N
     service = commerce(sandbox)
     first, _nonce, _state = await sandbox.create()
     second, _nonce, _state = await sandbox.create()
-    sku = master.products[0].variants[0].sku
+    variant_id = master.products[0].variants[0].id
 
     redis.conflicts = 1
-    cart = await service.change_cart(first, sku, 2, add=True)
+    cart = await service.change_cart(first, variant_id, 2, add=True)
     assert cart.item_count == 2
     assert cart.subtotal_minor == 200
     assert cart.lines[0].unit_price_minor == 100
     assert (await service.cart(second)).lines == ()
 
-    cart = await service.change_cart(first, sku, 1, add=True)
+    cart = await service.change_cart(first, variant_id, 1, add=True)
     assert cart.lines[0].quantity == 3
     with pytest.raises(CommerceError, match="Quantity exceeds"):
-        await service.change_cart(first, sku, 2, add=True)
+        await service.change_cart(first, variant_id, 2, add=True)
 
 
 @pytest.mark.asyncio
@@ -117,13 +117,13 @@ async def test_checkout_rejects_stock_and_funds_then_is_atomic_and_idempotent() 
     sandbox, redis, _secrets, master = await service_fixture()
     service = commerce(sandbox, stock=2)
     session_id, _nonce, _state = await sandbox.create()
-    sku = master.products[0].variants[0].sku
+    variant_id = master.products[0].variants[0].id
     shipping = address()
     await service.put_address(session_id, shipping)
 
     with pytest.raises(CommerceError, match="stock"):
-        await service.change_cart(session_id, sku, 3, add=False)
-    await service.change_cart(session_id, sku, 2, add=False)
+        await service.change_cart(session_id, variant_id, 3, add=False)
+    await service.change_cart(session_id, variant_id, 2, add=False)
     with pytest.raises(CommerceError, match="funds"):
         await service.checkout(session_id, shipping.id, None, "funds-attempt")
 
@@ -153,11 +153,11 @@ async def test_order_cancellation_and_refund_compensate_once() -> None:
     sandbox, _redis, _secrets, master = await service_fixture()
     service = commerce(sandbox, stock=3)
     session_id, _nonce, _state = await sandbox.create()
-    sku = master.products[0].variants[0].sku
+    variant_id = master.products[0].variants[0].id
     shipping = address()
     await service.put_address(session_id, shipping)
     await service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
-    await service.change_cart(session_id, sku, 1, add=False)
+    await service.change_cart(session_id, variant_id, 1, add=False)
     order = await service.checkout(session_id, shipping.id, None, "cancel-me")
 
     cancelled = await service.transition_order(session_id, order.id, "cancel")
@@ -169,7 +169,7 @@ async def test_order_cancellation_and_refund_compensate_once() -> None:
     with pytest.raises(CommerceError, match="already final"):
         await service.transition_order(session_id, order.id, "refund")
 
-    await service.change_cart(session_id, sku, 1, add=False)
+    await service.change_cart(session_id, variant_id, 1, add=False)
     second = await service.checkout(session_id, shipping.id, None, "refund-me")
     refunded = await service.transition_order(session_id, second.id, "refund")
     assert refunded.status == "refunded"
@@ -241,18 +241,22 @@ async def test_commerce_api_requires_csrf_and_ignores_client_totals() -> None:
             "/v1/sandbox/session/create", headers={"Origin": "https://client.test"}
         )
         token = created.json()["csrf_token"]
-        sku = master.products[0].variants[0].sku
-        rejected = await client.post("/v1/cart/items", json={"sku": sku, "quantity": 1})
-        assert rejected.status_code == 400
+        variant_id = str(master.products[0].variants[0].id)
+        rejected = await client.post(
+            "/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        )
+        assert rejected.status_code == 403
         headers = {"Origin": "https://client.test", "X-CSRF-Token": token}
         added = await client.post(
             "/v1/cart/items",
-            json={"sku": sku, "quantity": 1, "total_minor": 1},
+            json={"variant_id": variant_id, "quantity": 1, "total_minor": 1},
             headers=headers,
         )
         assert added.status_code == 422
         added = await client.post(
-            "/v1/cart/items", json={"sku": sku, "quantity": 1}, headers=headers
+            "/v1/cart/items",
+            json={"variant_id": variant_id, "quantity": 1},
+            headers=headers,
         )
         assert added.status_code == 200
         assert added.json()["subtotal_minor"] == 100

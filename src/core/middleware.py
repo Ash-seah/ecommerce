@@ -87,6 +87,24 @@ def _security_headers(request: Request, response: Response) -> None:
     response.headers["Content-Security-Policy"] = _API_CSP
 
 
+def _strip_root_path(request: Request, root_path: str) -> None:
+    """Normalize paths when the reverse proxy forwards the public /api prefix."""
+    if not root_path or root_path == "/":
+        return
+    path = request.scope.get("path", "")
+    if not isinstance(path, str):
+        return
+    if path == root_path:
+        request.scope["path"] = "/"
+        request.scope["root_path"] = root_path
+        return
+    prefix = root_path if root_path.endswith("/") else f"{root_path}/"
+    if path.startswith(prefix):
+        stripped = path[len(root_path) :] or "/"
+        request.scope["path"] = stripped
+        request.scope["root_path"] = root_path
+
+
 class RequestMiddleware(BaseHTTPMiddleware):
     """Apply controls without recording request headers, cookies, bodies, or tokens."""
 
@@ -99,6 +117,7 @@ class RequestMiddleware(BaseHTTPMiddleware):
         request_id = safe_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         settings = request.app.state.settings
+        _strip_root_path(request, settings.root_path)
 
         response: Response
         content_length = request.headers.get("content-length")
@@ -185,16 +204,11 @@ class RequestMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            _logger.error(
-                json.dumps(
-                    {
-                        "event": "unhandled_request_error",
-                        "request_id": request_id,
-                        "method": request.method,
-                        "path": request.url.path,
-                    },
-                    separators=(",", ":"),
-                )
+            _logger.exception(
+                "unhandled_request_error request_id=%s method=%s path=%s",
+                request_id,
+                request.method,
+                request.scope.get("path"),
             )
             response = problem(
                 request,
