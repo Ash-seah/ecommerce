@@ -102,6 +102,7 @@ async def test_docs_csp_allows_swagger_cdn(client: httpx.AsyncClient) -> None:
     assert "cdn.jsdelivr.net" in policy
     assert "unsafe-inline" in policy
     assert "connect-src 'self' https://cdn.jsdelivr.net" in policy
+    assert policy != "default-src 'none'; frame-ancestors 'none'"
 
     live = await client.get("/health/live")
     assert live.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"

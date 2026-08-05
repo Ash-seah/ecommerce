@@ -43,7 +43,36 @@ def _route(request: Request) -> str:
     return path if isinstance(path, str) else "unmatched"
 
 
-_DOCS_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
+_DOCS_CSP = (
+    "default-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "connect-src 'self' https://cdn.jsdelivr.net; "
+    "font-src 'self' data: https://cdn.jsdelivr.net"
+)
+_API_CSP = "default-src 'none'; frame-ancestors 'none'"
+
+
+def _is_docs_request(request: Request) -> bool:
+    """Match Swagger/ReDoc whether or not a reverse-proxy root path is present."""
+    candidates = {
+        request.url.path,
+        request.scope.get("path", ""),
+        _route(request),
+    }
+    for raw in candidates:
+        if not isinstance(raw, str) or not raw:
+            continue
+        path = raw if raw.startswith("/") else f"/{raw}"
+        normalized = path.rstrip("/") or "/"
+        if normalized.endswith(("/docs", "/redoc", "/openapi.json")):
+            return True
+        if "/docs/" in path or "/redoc/" in path:
+            return True
+    return False
 
 
 def _security_headers(request: Request, response: Response) -> None:
@@ -51,25 +80,11 @@ def _security_headers(request: Request, response: Response) -> None:
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    # Swagger/ReDoc load CDN assets and an inline bootstrap script.
-    if request.url.path in _DOCS_PATHS or request.url.path.startswith(("/docs/", "/redoc/")):
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            (
-                "default-src 'none'; "
-                "base-uri 'none'; "
-                "frame-ancestors 'none'; "
-                "img-src 'self' data: https://fastapi.tiangolo.com; "
-                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-                "connect-src 'self' https://cdn.jsdelivr.net; "
-                "font-src 'self' data: https://cdn.jsdelivr.net"
-            ),
-        )
+    # Force the value: setdefault can leave a prior restrictive CSP in place.
+    if _is_docs_request(request):
+        response.headers["Content-Security-Policy"] = _DOCS_CSP
         return
-    response.headers.setdefault(
-        "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
-    )
+    response.headers["Content-Security-Policy"] = _API_CSP
 
 
 class RequestMiddleware(BaseHTTPMiddleware):
