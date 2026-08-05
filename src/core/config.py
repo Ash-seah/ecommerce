@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     app_name: str = "Ecommerce Sandbox API"
     api_port: int = Field(default=8001, ge=1, le=65535)
+    # Public reverse-proxy prefix (e.g. /api). Empty for direct local access.
+    root_path: str = Field(default="", pattern=r"^$|^/([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$")
 
     ecommerce_owner_password: SecretStr = Field(min_length=32)
     ecommerce_reader_password: SecretStr = Field(min_length=32)

@@ -21,7 +21,7 @@ USER app
 
 EXPOSE 8001
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001", "--root-path", "/api"]
 
 FROM base AS test
 RUN python -m pip install ".[dev]"

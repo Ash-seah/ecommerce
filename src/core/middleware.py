@@ -62,7 +62,7 @@ def _security_headers(request: Request, response: Response) -> None:
                 "img-src 'self' data: https://fastapi.tiangolo.com; "
                 "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-                "connect-src 'self'; "
+                "connect-src 'self' https://cdn.jsdelivr.net; "
                 "font-src 'self' data: https://cdn.jsdelivr.net"
             ),
         )

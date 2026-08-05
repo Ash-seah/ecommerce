@@ -122,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"name": "commerce", "description": "Session-local shopping and checkout workflows."},
             {"name": "admin", "description": "Copy-on-write catalog administration."},
         ],
+        root_path=resolved_settings.root_path,
         lifespan=lifespan,
     )
     application.state.reader_database = database
