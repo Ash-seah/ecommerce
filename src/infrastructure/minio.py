@@ -87,8 +87,16 @@ class MediaService:
             return await asyncio.to_thread(operation, *args, **kwargs)
 
     async def url(self, object_key: str) -> str:
+        """Return a browser-reachable object URL.
+
+        Prefer MEDIA_PUBLIC_BASE_URL (unsigned public/gateway URL). Presigned
+        fallbacks use the MinIO client endpoint and are only useful when that
+        hostname is reachable by the browser.
+        """
         if self._base_url is not None:
-            return f"{self._base_url}/{quote(self.sandbox_bucket)}/{quote(object_key)}"
+            bucket = quote(self.sandbox_bucket, safe="")
+            key = quote(object_key, safe="/")
+            return f"{self._base_url}/{bucket}/{key}"
         return await self._offload(
             self._client.presigned_get_object,
             self.sandbox_bucket,

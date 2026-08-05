@@ -1,7 +1,24 @@
 """Copy-on-write catalog projection for a pinned master revision."""
 
+from typing import Any
+
+from pydantic import BaseModel
+
 from src.catalog.schemas import CatalogSnapshot, CategorySnapshot, ProductSnapshot
 from src.sandbox.models import SandboxState
+
+
+def _overlay_updates(overlay: BaseModel) -> dict[str, Any]:
+    """Apply only real overrides.
+
+    Redis round-trips mark default null overlay fields as set, so skip nulls.
+    Keep nested model values (e.g. MediaSnapshot) instead of dumped dicts.
+    """
+    return {
+        field: getattr(overlay, field)
+        for field in overlay.model_fields_set
+        if getattr(overlay, field) is not None
+    }
 
 
 def merge_catalog(master: CatalogSnapshot, state: SandboxState) -> CatalogSnapshot:
@@ -16,7 +33,7 @@ def merge_catalog(master: CatalogSnapshot, state: SandboxState) -> CatalogSnapsh
         categories.append(
             category
             if category_overlay is None
-            else category.model_copy(update=category_overlay.model_dump(exclude_unset=True))
+            else category.model_copy(update=_overlay_updates(category_overlay))
         )
     categories.extend(
         category
@@ -40,7 +57,7 @@ def merge_catalog(master: CatalogSnapshot, state: SandboxState) -> CatalogSnapsh
             variants.append(
                 variant
                 if variant_overlay is None
-                else variant.model_copy(update=variant_overlay.model_dump(exclude_unset=True))
+                else variant.model_copy(update=_overlay_updates(variant_overlay))
             )
         variants.extend(
             custom.variant
@@ -49,7 +66,7 @@ def merge_catalog(master: CatalogSnapshot, state: SandboxState) -> CatalogSnapsh
         )
         update: dict[str, object] = {"variants": tuple(variants)}
         if product_overlay is not None:
-            update.update(product_overlay.model_dump(exclude_unset=True))
+            update.update(_overlay_updates(product_overlay))
         products.append(product.model_copy(update=update))
 
     return master.model_copy(update={"categories": tuple(categories), "products": tuple(products)})

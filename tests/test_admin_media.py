@@ -257,6 +257,46 @@ def media_service(fake: FakeMinio, *, maximum: int = 1024) -> MediaService:
 
 
 @pytest.mark.asyncio
+async def test_add_media_round_trip_keeps_product_identity_fields() -> None:
+    from src.catalog.schemas import MediaSnapshot
+
+    sandbox, _redis, _secrets, master = await service_fixture()
+    admin = AdminService(sandbox, default_stock=5)
+    commerce_service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+    media = MediaSnapshot(
+        id=uuid4(),
+        object_key="sandboxes/demo/green.jpg",
+        content_type="image/jpeg",
+        alt_text="green shoes",
+        byte_size=85624,
+        sort_order=0,
+        url="https://cdn.test/ecommerce-sandboxes/sandboxes/demo/green.jpg",
+    )
+    _state, updated = await admin.add_media(session_id, product.id, media)
+    assert updated.category_id == product.category_id
+    assert updated.slug == product.slug
+    assert updated.name == product.name
+    assert any(item.id == media.id for item in updated.media)
+
+    page = await commerce_service.products(
+        session_id,
+        page=1,
+        page_size=20,
+        search=None,
+        category=None,
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="name",
+    )
+    assert page.total >= 1
+    assert page.items[0].name == product.name
+    assert page.items[0].category_id == product.category_id
+
+
+@pytest.mark.asyncio
 async def test_media_rejects_spoofing_and_size_and_enforces_namespace() -> None:
     fake = FakeMinio()
     service = media_service(fake, maximum=20)

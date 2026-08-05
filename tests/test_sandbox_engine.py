@@ -240,6 +240,40 @@ def test_copy_on_write_merge_preserves_master_and_applies_overlays() -> None:
     assert master.products[0].variants[0].price_minor == 100
 
 
+def test_merge_ignores_null_overlay_fields_after_redis_round_trip() -> None:
+    """model_dump_json includes nulls; reload marks them set — must not wipe master fields."""
+    from src.catalog.schemas import MediaSnapshot
+
+    master = snapshot()
+    product = master.products[0]
+    media = MediaSnapshot(
+        id=uuid4(),
+        object_key="sandboxes/demo/shoe.jpg",
+        content_type="image/jpeg",
+        alt_text="green shoes",
+        byte_size=100,
+        sort_order=0,
+        url="https://example.test/media/shoe.jpg",
+    )
+    overlay = ProductOverlay.model_validate(
+        ProductOverlay(media=(media,)).model_dump()
+    )
+    assert overlay.model_dump(exclude_unset=True)["category_id"] is None
+    now = datetime.now(UTC)
+    state = SandboxState(
+        pinned_master_revision=8,
+        created_at=now,
+        updated_at=now,
+        csrf_nonce_hash="a" * 64,
+        product_overlays={product.id: overlay},
+    )
+    merged = merge_catalog(master, state)
+    assert merged.products[0].category_id == product.category_id
+    assert merged.products[0].slug == product.slug
+    assert merged.products[0].name == product.name
+    assert merged.products[0].media[-1].id == media.id
+
+
 @pytest.mark.asyncio
 async def test_cookie_flags_origin_bound_csrf_and_rotation() -> None:
     service, _redis, secrets, _master = await service_fixture()
