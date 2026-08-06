@@ -16,7 +16,8 @@ from src.sandbox.models import CouponRecord
 
 
 class AdminModel(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+    # Non-strict so JSON request bodies can send UUID fields as strings.
+    model_config = ConfigDict(extra="forbid")
 
 
 class CategoryInput(AdminModel):
@@ -28,7 +29,6 @@ class CategoryInput(AdminModel):
 
 class ProductInput(AdminModel):
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
         json_schema_extra={
             "examples": [
@@ -48,7 +48,6 @@ class ProductInput(AdminModel):
 
 class VariantInput(AdminModel):
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
         json_schema_extra={
             "examples": [
@@ -84,7 +83,6 @@ class ActiveAdjustment(AdminModel):
 
 class CouponInput(AdminModel):
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
         json_schema_extra={
             "examples": [

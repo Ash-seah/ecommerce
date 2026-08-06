@@ -1,7 +1,11 @@
 from uuid import uuid4
 
 from src.catalog.schemas import CategorySnapshot
-from src.commerce.category_tree import build_category_forest, category_subtree
+from src.commerce.category_tree import (
+    build_category_forest,
+    category_and_descendant_ids,
+    category_subtree,
+)
 
 
 def _category(
@@ -56,3 +60,14 @@ def test_missing_parent_becomes_root() -> None:
     assert len(forest) == 1
     assert forest[0].slug == "orphan"
     assert forest[0].children == ()
+
+
+def test_category_filter_includes_descendant_ids() -> None:
+    men = _category(name="Men", slug="men", sort_order=10)
+    running = _category(
+        name="Men Running", slug="men-running", sort_order=11, parent_id=men.id
+    )
+    boots = _category(name="Men Boots", slug="men-boots", sort_order=13, parent_id=men.id)
+    selected = category_and_descendant_ids((men, running, boots), "men")
+    assert selected == {men.id, running.id, boots.id}
+    assert category_and_descendant_ids((men, running, boots), "missing") is None

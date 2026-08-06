@@ -104,7 +104,10 @@ class CartView(CommerceModel):
     currency: Currency
 
 
-class WishlistRequest(CommerceModel):
+class WishlistRequest(BaseModel):
+    # Non-strict so JSON string UUIDs coerce.
+    model_config = ConfigDict(extra="forbid")
+
     product_id: UUID
 
 
@@ -112,9 +115,8 @@ class WishlistView(CommerceModel):
     items: tuple[ProductView, ...]
 
 
-class AddressInput(CommerceModel):
+class AddressInput(BaseModel):
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
         json_schema_extra={
             "examples": [
@@ -149,7 +151,9 @@ class WalletView(CommerceModel):
     currency: Currency
 
 
-class WalletAdjustmentRequest(CommerceModel):
+class WalletAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     amount_minor: int = Field(gt=0, le=1_000_000_000)
     reference: str = Field(min_length=1, max_length=120)
 
@@ -171,9 +175,9 @@ class PricingBreakdown(CommerceModel):
     total_minor: Minor
 
 
-class CheckoutRequest(CommerceModel):
+class CheckoutRequest(BaseModel):
+    # Non-strict so JSON string UUIDs coerce.
     model_config = ConfigDict(
-        strict=True,
         extra="forbid",
         json_schema_extra={
             "examples": [
@@ -197,5 +201,7 @@ class OrderPage(CommerceModel):
     pages: Minor
 
 
-class OrderTransitionRequest(CommerceModel):
+class OrderTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     action: Literal["cancel", "refund"]

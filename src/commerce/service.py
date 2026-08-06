@@ -11,7 +11,11 @@ from src.catalog.schemas import (
     ProductSnapshot,
     VariantSnapshot,
 )
-from src.commerce.category_tree import build_category_forest, category_subtree
+from src.commerce.category_tree import (
+    build_category_forest,
+    category_and_descendant_ids,
+    category_subtree,
+)
 from src.commerce.schemas import (
     CartLineView,
     CartView,
@@ -239,13 +243,11 @@ class CommerceService:
         sort: Literal["name", "-name", "price", "-price"],
     ) -> ProductPage:
         state, catalog = await self._state_catalog(session_id)
-        category_ids = {
-            item.id
-            for item in catalog.categories
-            if category is not None and (str(item.id) == category or item.slug == category)
-        }
-        if category is not None and not category_ids:
-            raise CommerceError(404, "category_not_found", "Category was not found")
+        category_ids: set[UUID] | None = None
+        if category is not None:
+            category_ids = category_and_descendant_ids(catalog.categories, category)
+            if category_ids is None:
+                raise CommerceError(404, "category_not_found", "Category was not found")
         views = [
             self._product_view(product, state) for product in catalog.products if product.variants
         ]
@@ -258,7 +260,7 @@ class CommerceService:
                 or needle in (item.description or "").casefold()
                 or any(needle in variant.sku.casefold() for variant in item.variants)
             ]
-        if category_ids:
+        if category_ids is not None:
             views = [item for item in views if item.category_id in category_ids]
         if min_price_minor is not None:
             views = [item for item in views if item.price_max_minor >= min_price_minor]

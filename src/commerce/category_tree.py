@@ -10,6 +10,37 @@ from src.catalog.schemas import CategorySnapshot
 from src.commerce.schemas import CategoryNode
 
 
+def category_and_descendant_ids(
+    categories: Sequence[CategorySnapshot], identifier: str
+) -> set[UUID] | None:
+    """Return the matched category id plus every descendant id, or None if unknown."""
+    match = next(
+        (
+            category
+            for category in categories
+            if str(category.id) == identifier or category.slug == identifier
+        ),
+        None,
+    )
+    if match is None:
+        return None
+
+    children_of: dict[UUID, list[UUID]] = defaultdict(list)
+    for category in categories:
+        if category.parent_id is not None:
+            children_of[category.parent_id].append(category.id)
+
+    selected: set[UUID] = set()
+    stack = [match.id]
+    while stack:
+        current = stack.pop()
+        if current in selected:
+            continue
+        selected.add(current)
+        stack.extend(children_of.get(current, ()))
+    return selected
+
+
 def _sort_key(category: CategorySnapshot) -> tuple[int, str, str]:
     return (category.sort_order, category.name.casefold(), str(category.id))
 
