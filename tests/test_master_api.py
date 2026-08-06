@@ -27,7 +27,7 @@ class StubMasterService:
         return CategorySnapshot(
             id=uuid4(),
             parent_id=None,
-            slug="demo",
+            slug="a1b2c3d4e5f6",
             name="Demo",
             description=None,
             sort_order=0,
@@ -97,7 +97,7 @@ async def test_owner_database_uses_migration_role() -> None:
 async def test_login_and_bearer_protect_master_routes(client: httpx.AsyncClient) -> None:
     denied = await client.post(
         "/v1/master/categories",
-        json={"slug": "demo", "name": "Demo"},
+        json={"name": "Demo"},
     )
     assert denied.status_code == 401
     assert denied.json()["code"] == "auth_required"
@@ -119,11 +119,12 @@ async def test_login_and_bearer_protect_master_routes(client: httpx.AsyncClient)
 
     created = await client.post(
         "/v1/master/categories",
-        json={"slug": "demo", "name": "Demo"},
+        json={"name": "Demo"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert created.status_code == 200
-    assert created.json()["category"]["slug"] == "demo"
+    assert created.json()["category"]["name"] == "Demo"
+    assert len(created.json()["category"]["slug"]) == 12
 
     published = await client.post(
         "/v1/master/catalog/publish",

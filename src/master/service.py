@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.catalog.cache import CatalogSnapshotCache
+from src.catalog.ids import short_uuid
 from src.catalog.models import CatalogRevision, Category, MediaMetadata, Product, ProductVariant
 from src.catalog.schemas import (
     CategorySnapshot,
@@ -45,6 +46,21 @@ class MasterCatalogService:
         self._media = media
         self._cache = catalog_cache
 
+    async def _unique_slug(
+        self,
+        session: AsyncSession,
+        model: type[Category] | type[Product],
+        revision_id: UUID,
+    ) -> str:
+        for _ in range(8):
+            candidate = short_uuid()
+            exists = await session.scalar(
+                select(model.id).where(model.revision_id == revision_id, model.slug == candidate)
+            )
+            if exists is None:
+                return candidate
+        raise MasterError(500, "slug_allocate_failed", "Could not allocate a unique short id")
+
     async def _active_revision(self, session: AsyncSession) -> CatalogRevision:
         revision = await session.scalar(
             select(CatalogRevision).where(CatalogRevision.is_active.is_(True))
@@ -67,18 +83,11 @@ class MasterCatalogService:
                 parent = await session.get(Category, body.parent_id)
                 if parent is None or parent.revision_id != revision.id:
                     raise MasterError(404, "parent_not_found", "Parent category was not found")
-            exists = await session.scalar(
-                select(Category.id).where(
-                    Category.revision_id == revision.id, Category.slug == body.slug
-                )
-            )
-            if exists is not None:
-                raise MasterError(409, "slug_conflict", "Category slug already exists")
             category = Category(
                 id=uuid4(),
                 revision_id=revision.id,
                 parent_id=body.parent_id,
-                slug=body.slug,
+                slug=await self._unique_slug(session, Category, revision.id),
                 name=body.name,
                 description=body.description,
                 sort_order=body.sort_order,
@@ -96,16 +105,6 @@ class MasterCatalogService:
             if category is None:
                 raise MasterError(404, "category_not_found", "Category was not found")
             data = body.model_dump(exclude_unset=True)
-            if "slug" in data and data["slug"] != category.slug:
-                exists = await session.scalar(
-                    select(Category.id).where(
-                        Category.revision_id == category.revision_id,
-                        Category.slug == data["slug"],
-                        Category.id != category_id,
-                    )
-                )
-                if exists is not None:
-                    raise MasterError(409, "slug_conflict", "Category slug already exists")
             if "parent_id" in data and data["parent_id"] is not None:
                 if data["parent_id"] == category_id:
                     raise MasterError(422, "invalid_parent", "Category cannot parent itself")
@@ -125,18 +124,11 @@ class MasterCatalogService:
             category = await session.get(Category, body.category_id)
             if category is None or category.revision_id != revision.id:
                 raise MasterError(404, "category_not_found", "Category was not found")
-            exists = await session.scalar(
-                select(Product.id).where(
-                    Product.revision_id == revision.id, Product.slug == body.slug
-                )
-            )
-            if exists is not None:
-                raise MasterError(409, "slug_conflict", "Product slug already exists")
             product = Product(
                 id=uuid4(),
                 revision_id=revision.id,
                 category_id=body.category_id,
-                slug=body.slug,
+                slug=await self._unique_slug(session, Product, revision.id),
                 name=body.name,
                 description=body.description,
                 is_active=body.is_active,
@@ -165,16 +157,6 @@ class MasterCatalogService:
                 category = await session.get(Category, data["category_id"])
                 if category is None or category.revision_id != product.revision_id:
                     raise MasterError(404, "category_not_found", "Category was not found")
-            if "slug" in data and data["slug"] != product.slug:
-                exists = await session.scalar(
-                    select(Product.id).where(
-                        Product.revision_id == product.revision_id,
-                        Product.slug == data["slug"],
-                        Product.id != product_id,
-                    )
-                )
-                if exists is not None:
-                    raise MasterError(409, "slug_conflict", "Product slug already exists")
             for key, value in data.items():
                 setattr(product, key, value)
             await session.flush()

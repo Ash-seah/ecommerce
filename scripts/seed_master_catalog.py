@@ -44,7 +44,7 @@ async def seed() -> None:
             .values(
                 id=category_id,
                 revision_id=revision_id,
-                slug="apparel",
+                slug=category_id.hex[:12],
                 name="Apparel",
                 description="Everyday apparel",
                 sort_order=10,
@@ -67,7 +67,7 @@ async def seed() -> None:
                 id=product_id,
                 revision_id=revision_id,
                 category_id=category_id,
-                slug="classic-tee",
+                slug=product_id.hex[:12],
                 name="Classic Tee",
                 description="A deterministic sample product",
                 is_active=True,

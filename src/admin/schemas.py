@@ -21,7 +21,6 @@ class AdminModel(BaseModel):
 
 class CategoryInput(AdminModel):
     parent_id: UUID | None = None
-    slug: str = Field(min_length=1, max_length=120)
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     sort_order: int = 0
@@ -35,7 +34,6 @@ class ProductInput(AdminModel):
             "examples": [
                 {
                     "category_id": "00000000-0000-4000-8000-000000000001",
-                    "slug": "sandbox-shirt",
                     "name": "Sandbox Shirt",
                     "description": "Visible only in this anonymous sandbox.",
                 }
@@ -44,7 +42,6 @@ class ProductInput(AdminModel):
     )
 
     category_id: UUID
-    slug: str = Field(min_length=1, max_length=120)
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
 

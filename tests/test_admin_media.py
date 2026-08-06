@@ -31,7 +31,6 @@ async def test_admin_overlays_are_isolated_and_never_mutate_master() -> None:
         product.id,
         ProductInput(
             category_id=product.category_id,
-            slug=product.slug,
             name="Sandbox product",
             description="local",
         ),
@@ -74,7 +73,6 @@ async def test_tombstones_restore_and_restore_all_preserve_commerce_state() -> N
         product.id,
         ProductInput(
             category_id=product.category_id,
-            slug=product.slug,
             name="Temporary",
             description=None,
         ),
@@ -146,7 +144,6 @@ async def test_admin_validates_references_and_duplicate_skus() -> None:
             session_id,
             ProductInput(
                 category_id=uuid4(),
-                slug="orphan",
                 name="Orphan",
                 description=None,
             ),
@@ -156,11 +153,11 @@ async def test_admin_validates_references_and_duplicate_skus() -> None:
         session_id,
         ProductInput(
             category_id=master.categories[0].id,
-            slug="custom",
             name="Custom",
             description=None,
         ),
     )
+    assert len(product.slug) == 12
     assert product_state.version > 0
     with pytest.raises(AdminError, match="SKU"):
         await admin.create_variant(

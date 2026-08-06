@@ -175,7 +175,7 @@ TOKEN=$(curl -sS -X POST http://localhost:8001/v1/master/auth/login \
 
 curl -sS -X POST http://localhost:8001/v1/master/categories \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"slug":"shoes","name":"Shoes","sort_order":0}'
+  -d '{"name":"Shoes","sort_order":0}'
 
 # After creating a product, upload a PNG/JPEG/WebP into ecommerce-master:
 curl -sS -X POST "http://localhost:8001/v1/master/products/$PRODUCT_ID/media" \
@@ -234,12 +234,14 @@ job idempotently creates both buckets and imports the lifecycle policy from
 granularity is days; normal reset cleanup is immediate and Redis sessions expire in
 two hours.
 
+When `MEDIA_PUBLIC_BASE_URL` is set (e.g. `https://ecommerce.terabitventure.com/media`),
+Nginx should proxy `/media/` to MinIO, and **both** `ecommerce-master` and
+`ecommerce-sandboxes` need anonymous download (`mc anonymous set download`). `minio-init`
+applies that on every setup run.
+
 When `MEDIA_PUBLIC_BASE_URL` is unset, the API returns one-hour presigned URLs based on
 `MINIO_ENDPOINT`. That hostname must be resolvable by both the API container and the
-client (normally an HTTPS reverse-proxy DNS name in deployment). `minio:9000` is only
-resolvable on the Docker network. Set `MEDIA_PUBLIC_BASE_URL` only when a gateway
-deliberately serves `/<bucket>/<object>` without MinIO query signatures; it does not
-magically make a private bucket public.
+client. `minio:9000` is only resolvable on the Docker network.
 
 ## Backup and restore boundaries
 

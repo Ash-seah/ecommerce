@@ -85,9 +85,10 @@ async def test_master_service_creates_category_and_refreshes_cache() -> None:
     session = FakeSession(revision)
     service = MasterCatalogService(SessionFactory(session), object(), FakeCache())  # type: ignore[arg-type]
     created = await service.create_category(
-        CategoryCreate(slug="boots", name="Boots", description=None)
+        CategoryCreate(name="Boots", description=None)
     )
-    assert created.slug == "boots"
+    assert len(created.slug) == 12
+    assert created.slug.isalnum()
     assert isinstance(session.added[0], Category)
 
 
@@ -105,7 +106,6 @@ async def test_master_service_rejects_unknown_category_for_product() -> None:
         await service.create_product(
             ProductCreate(
                 category_id=uuid4(),
-                slug="ghost",
                 name="Ghost",
                 description=None,
             )

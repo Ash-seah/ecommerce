@@ -29,7 +29,6 @@ class TokenResponse(MasterModel):
 
 
 class CategoryCreate(MasterModel):
-    slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     parent_id: UUID | None = None
@@ -38,7 +37,6 @@ class CategoryCreate(MasterModel):
 
 
 class CategoryUpdate(MasterModel):
-    slug: str | None = Field(default=None, min_length=1, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     parent_id: UUID | None = None
@@ -48,7 +46,6 @@ class CategoryUpdate(MasterModel):
 
 class ProductCreate(MasterModel):
     category_id: UUID
-    slug: str = Field(min_length=1, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
     is_active: bool = True
@@ -56,7 +53,6 @@ class ProductCreate(MasterModel):
 
 class ProductUpdate(MasterModel):
     category_id: UUID | None = None
-    slug: str | None = Field(default=None, min_length=1, max_length=120)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
     is_active: bool | None = None

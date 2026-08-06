@@ -10,6 +10,7 @@ from src.admin.schemas import (
     ProductInput,
     VariantInput,
 )
+from src.catalog.ids import short_uuid
 from src.catalog.schemas import (
     CatalogSnapshot,
     CategorySnapshot,
@@ -120,30 +121,44 @@ class AdminService:
         state = await self._sandbox.mutate(session_id, mutation)
         return state, merge_catalog(master, state)
 
+    def _allocate_slug(self, catalog: CatalogSnapshot) -> str:
+        taken = {item.slug.casefold() for item in (*catalog.categories, *catalog.products)}
+        for _ in range(8):
+            candidate = short_uuid()
+            if candidate not in taken:
+                return candidate
+        raise AdminError(500, "slug_allocate_failed", "Could not allocate a unique short id")
+
     async def create_category(
         self, session_id: str, body: CategoryInput
     ) -> tuple[SandboxState, CategorySnapshot]:
-        category = CategorySnapshot(id=uuid4(), **body.model_dump())
+        category_id = uuid4()
 
-        def change(state: SandboxState, _catalog: CatalogSnapshot) -> SandboxState:
+        def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            category = CategorySnapshot(
+                id=category_id,
+                slug=self._allocate_slug(catalog),
+                **body.model_dump(),
+            )
             custom = dict(state.custom_categories)
-            custom[category.id] = category
+            custom[category_id] = category
             return state.model_copy(update={"custom_categories": custom})
 
         state, catalog = await self._mutate_catalog(session_id, change)
-        return state, self._category(catalog, category.id)
+        return state, self._category(catalog, category_id)
 
     async def update_category(
         self, session_id: str, category_id: UUID, body: CategoryInput
     ) -> tuple[SandboxState, CategorySnapshot]:
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
-            self._category(catalog, category_id)
+            current = self._category(catalog, category_id)
+            data = body.model_dump()
             if category_id in state.custom_categories:
                 custom = dict(state.custom_categories)
-                custom[category_id] = CategorySnapshot(id=category_id, **body.model_dump())
+                custom[category_id] = current.model_copy(update=data)
                 return state.model_copy(update={"custom_categories": custom})
             overlays = dict(state.category_overlays)
-            overlays[category_id] = CategoryOverlay(**body.model_dump())
+            overlays[category_id] = CategoryOverlay(**data)
             return state.model_copy(update={"category_overlays": overlays})
 
         state, catalog = await self._mutate_catalog(session_id, change)
@@ -193,15 +208,22 @@ class AdminService:
     async def create_product(
         self, session_id: str, body: ProductInput
     ) -> tuple[SandboxState, ProductSnapshot]:
-        product = ProductSnapshot(id=uuid4(), variants=(), media=(), **body.model_dump())
+        product_id = uuid4()
 
-        def change(state: SandboxState, _catalog: CatalogSnapshot) -> SandboxState:
+        def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            product = ProductSnapshot(
+                id=product_id,
+                slug=self._allocate_slug(catalog),
+                variants=(),
+                media=(),
+                **body.model_dump(),
+            )
             custom = dict(state.custom_products)
-            custom[product.id] = product
+            custom[product_id] = product
             return state.model_copy(update={"custom_products": custom})
 
         state, catalog = await self._mutate_catalog(session_id, change)
-        return state, self._product(catalog, product.id)
+        return state, self._product(catalog, product_id)
 
     async def update_product(
         self, session_id: str, product_id: UUID, body: ProductInput
