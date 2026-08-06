@@ -144,6 +144,7 @@ class MasterCatalogService:
                 slug=await self._unique_slug(session, Product, revision.id),
                 name=body.name,
                 description=body.description,
+                discount_percent=body.discount_percent,
                 is_active=body.is_active,
             )
             session.add(product)
@@ -154,6 +155,8 @@ class MasterCatalogService:
                 slug=product.slug,
                 name=product.name,
                 description=product.description,
+                discount_percent=product.discount_percent,
+                is_active=product.is_active,
                 variants=(),
                 media=(),
             )
@@ -179,6 +182,8 @@ class MasterCatalogService:
                 slug=product.slug,
                 name=product.name,
                 description=product.description,
+                discount_percent=product.discount_percent,
+                is_active=product.is_active,
                 variants=(),
                 media=(),
             )
@@ -225,23 +230,34 @@ class MasterCatalogService:
         content_type: str | None,
         alt_text: str,
         sort_order: int,
+        *,
+        is_main: bool = False,
     ) -> MediaSnapshot:
         uploaded = await self._media.upload_master(
-            data, content_type, alt_text, sort_order, object_prefix="catalog/"
+            data,
+            content_type,
+            alt_text,
+            sort_order,
+            object_prefix="catalog/",
+            is_main=is_main,
         )
         try:
             async with self._sessions.begin() as session:
                 product = await session.get(Product, product_id)
                 if product is None:
                     raise MasterError(404, "product_not_found", "Product was not found")
+                if is_main:
+                    await self._clear_product_main(session, product_id, variant_id=None)
                 row = MediaMetadata(
                     id=uploaded.id,
                     product_id=product_id,
+                    variant_id=None,
                     object_key=uploaded.object_key,
                     content_type=uploaded.content_type,
                     alt_text=uploaded.alt_text,
                     byte_size=uploaded.byte_size,
                     sort_order=uploaded.sort_order,
+                    is_main=is_main,
                     is_active=True,
                 )
                 session.add(row)
@@ -251,6 +267,93 @@ class MasterCatalogService:
             raise
         await self._cache.refresh()
         return uploaded
+
+    async def attach_variant_media(
+        self,
+        variant_id: UUID,
+        data: bytes,
+        content_type: str | None,
+        alt_text: str,
+        sort_order: int,
+        *,
+        is_main: bool = False,
+    ) -> MediaSnapshot:
+        uploaded = await self._media.upload_master(
+            data,
+            content_type,
+            alt_text,
+            sort_order,
+            object_prefix="catalog/",
+            is_main=is_main,
+        )
+        try:
+            async with self._sessions.begin() as session:
+                variant = await session.get(ProductVariant, variant_id)
+                if variant is None:
+                    raise MasterError(404, "variant_not_found", "Variant was not found")
+                if is_main:
+                    await self._clear_product_main(
+                        session, variant.product_id, variant_id=variant_id
+                    )
+                row = MediaMetadata(
+                    id=uploaded.id,
+                    product_id=variant.product_id,
+                    variant_id=variant_id,
+                    object_key=uploaded.object_key,
+                    content_type=uploaded.content_type,
+                    alt_text=uploaded.alt_text,
+                    byte_size=uploaded.byte_size,
+                    sort_order=uploaded.sort_order,
+                    is_main=is_main,
+                    is_active=True,
+                )
+                session.add(row)
+                await session.flush()
+        except Exception:
+            await self._media.delete_master(uploaded.object_key)
+            raise
+        await self._cache.refresh()
+        return uploaded
+
+    async def set_media_main(self, media_id: UUID) -> MediaSnapshot:
+        async with self._sessions.begin() as session:
+            media = await session.get(MediaMetadata, media_id)
+            if media is None or not media.is_active:
+                raise MasterError(404, "media_not_found", "Media was not found")
+            await self._clear_product_main(session, media.product_id, variant_id=media.variant_id)
+            media.is_main = True
+            await session.flush()
+            snapshot = MediaSnapshot(
+                id=media.id,
+                object_key=media.object_key,
+                content_type=media.content_type,
+                alt_text=media.alt_text,
+                byte_size=media.byte_size,
+                sort_order=media.sort_order,
+                is_main=True,
+                url=None,
+            )
+        await self._cache.refresh()
+        # Re-read public URL via cache refresh path; rebuild with master URL helper.
+        uploaded_url = await self._media.url(snapshot.object_key, master=True)
+        return snapshot.model_copy(update={"url": uploaded_url})
+
+    @staticmethod
+    async def _clear_product_main(
+        session: AsyncSession, product_id: UUID, *, variant_id: UUID | None
+    ) -> None:
+        statement = select(MediaMetadata).where(
+            MediaMetadata.product_id == product_id,
+            MediaMetadata.is_active.is_(True),
+        )
+        if variant_id is None:
+            statement = statement.where(MediaMetadata.variant_id.is_(None))
+        else:
+            statement = statement.where(MediaMetadata.variant_id == variant_id)
+        rows = (await session.scalars(statement)).all()
+        for row in rows:
+            if row.is_main:
+                row.is_main = False
 
     async def delete_media(self, media_id: UUID) -> None:
         object_key: str | None = None

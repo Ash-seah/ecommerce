@@ -48,6 +48,7 @@ class ProductCreate(MasterModel):
     category_id: UUID
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
+    discount_percent: Annotated[int, Field(ge=0, le=100)] = 0
     is_active: bool = True
 
 
@@ -55,6 +56,7 @@ class ProductUpdate(MasterModel):
     category_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
+    discount_percent: Annotated[int | None, Field(default=None, ge=0, le=100)] = None
     is_active: bool | None = None
 
 

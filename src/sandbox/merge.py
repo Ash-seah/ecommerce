@@ -13,12 +13,28 @@ def _overlay_updates(overlay: BaseModel) -> dict[str, Any]:
 
     Redis round-trips mark default null overlay fields as set, so skip nulls.
     Keep nested model values (e.g. MediaSnapshot) instead of dumped dicts.
+    Booleans such as is_active=False must still apply.
     """
     return {
         field: getattr(overlay, field)
         for field in overlay.model_fields_set
         if getattr(overlay, field) is not None
     }
+
+
+def storefront_catalog(catalog: CatalogSnapshot) -> CatalogSnapshot:
+    """Projection shoppers see: inactive entities are omitted, not deleted."""
+
+    categories = tuple(item for item in catalog.categories if item.is_active)
+    products: list[ProductSnapshot] = []
+    for product in catalog.products:
+        if not product.is_active:
+            continue
+        variants = tuple(item for item in product.variants if item.is_active)
+        if not variants:
+            continue
+        products.append(product.model_copy(update={"variants": variants}))
+    return catalog.model_copy(update={"categories": categories, "products": tuple(products)})
 
 
 def merge_catalog(master: CatalogSnapshot, state: SandboxState) -> CatalogSnapshot:

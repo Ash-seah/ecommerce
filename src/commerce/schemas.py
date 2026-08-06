@@ -20,10 +20,12 @@ class VariantView(CommerceModel):
     id: UUID
     sku: str
     name: str
+    list_price_minor: Minor
     price_minor: Minor
     currency: Currency
     stock: Minor
     available: bool
+    media: tuple[MediaSnapshot, ...] = ()
 
 
 class ProductView(CommerceModel):
@@ -32,9 +34,11 @@ class ProductView(CommerceModel):
     slug: str
     name: str
     description: str | None
+    discount_percent: Minor
     variants: tuple[VariantView, ...]
     media: tuple[MediaSnapshot, ...]
     available: bool
+    stock: Minor
     price_min_minor: Minor
     price_max_minor: Minor
     currency: Currency
@@ -91,6 +95,7 @@ class CartLineView(CommerceModel):
     product_name: str
     variant_name: str
     quantity: int
+    list_price_minor: Minor
     unit_price_minor: Minor
     line_total_minor: Minor
     currency: Currency

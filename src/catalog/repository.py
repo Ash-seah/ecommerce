@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from src.catalog.models import CatalogRevision, MediaMetadata, Product
+from src.catalog.models import CatalogRevision, MediaMetadata, Product, ProductVariant
 from src.catalog.schemas import (
     CatalogSnapshot,
     CategorySnapshot,
@@ -52,7 +52,22 @@ class MasterCatalogRepository:
             alt_text=media.alt_text,
             byte_size=media.byte_size,
             sort_order=media.sort_order,
+            is_main=media.is_main,
             url=self._media_url(media.object_key),
+        )
+
+    def _media_list(self, items: list[MediaMetadata]) -> tuple[MediaSnapshot, ...]:
+        return tuple(
+            self._media_snapshot(media)
+            for media in sorted(
+                (item for item in items if item.is_active),
+                key=lambda item: (
+                    not item.is_main,
+                    item.sort_order,
+                    item.object_key,
+                    str(item.id),
+                ),
+            )
         )
 
     async def get_active_snapshot(self) -> CatalogSnapshot:
@@ -61,7 +76,9 @@ class MasterCatalogRepository:
             .where(CatalogRevision.is_active.is_(True))
             .options(
                 selectinload(CatalogRevision.categories),
-                selectinload(CatalogRevision.products).selectinload(Product.variants),
+                selectinload(CatalogRevision.products)
+                .selectinload(Product.variants)
+                .selectinload(ProductVariant.media),
                 selectinload(CatalogRevision.products).selectinload(Product.media),
             )
         )
@@ -73,7 +90,7 @@ class MasterCatalogRepository:
         categories = tuple(
             CategorySnapshot.model_validate(category)
             for category in sorted(
-                (item for item in revision.categories if item.is_active),
+                revision.categories,
                 key=lambda item: (item.sort_order, item.slug, str(item.id)),
             )
         )
@@ -84,27 +101,29 @@ class MasterCatalogRepository:
                 slug=product.slug,
                 name=product.name,
                 description=product.description,
+                discount_percent=product.discount_percent,
+                is_active=product.is_active,
                 variants=tuple(
-                    VariantSnapshot.model_validate(variant)
+                    VariantSnapshot(
+                        id=variant.id,
+                        sku=variant.sku,
+                        name=variant.name,
+                        price_minor=variant.price_minor,
+                        currency=variant.currency,
+                        is_active=variant.is_active,
+                        media=self._media_list(list(variant.media)),
+                    )
                     for variant in sorted(
-                        (item for item in product.variants if item.is_active),
+                        product.variants,
                         key=lambda item: (item.sku, str(item.id)),
                     )
                 ),
-                media=tuple(
-                    self._media_snapshot(media)
-                    for media in sorted(
-                        (item for item in product.media if item.is_active),
-                        key=lambda item: (item.sort_order, item.object_key, str(item.id)),
-                    )
+                media=self._media_list(
+                    [item for item in product.media if item.variant_id is None]
                 ),
             )
             for product in sorted(
-                (
-                    item
-                    for item in revision.products
-                    if item.is_active and any(variant.is_active for variant in item.variants)
-                ),
+                revision.products,
                 key=lambda item: (item.slug, str(item.id)),
             )
         )

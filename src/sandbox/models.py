@@ -12,6 +12,8 @@ from src.catalog.schemas import (
     ProductSnapshot,
     VariantSnapshot,
 )
+from src.sales.schemas import SaleEvent
+from src.views.schemas import ViewEvent
 
 NonNegativeInt = Annotated[int, Field(ge=0)]
 
@@ -26,6 +28,7 @@ class CategoryOverlay(SandboxModel):
     name: str | None = None
     description: str | None = None
     sort_order: int | None = None
+    is_active: bool | None = None
 
 
 class VariantOverlay(SandboxModel):
@@ -33,6 +36,8 @@ class VariantOverlay(SandboxModel):
     name: str | None = None
     price_minor: NonNegativeInt | None = None
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    is_active: bool | None = None
+    media: tuple[MediaSnapshot, ...] | None = None
 
 
 class ProductOverlay(SandboxModel):
@@ -40,6 +45,8 @@ class ProductOverlay(SandboxModel):
     slug: str | None = None
     name: str | None = None
     description: str | None = None
+    discount_percent: Annotated[int, Field(ge=0, le=100)] | None = None
+    is_active: bool | None = None
     media: tuple[MediaSnapshot, ...] | None = None
 
 
@@ -177,6 +184,8 @@ class SandboxState(SandboxModel):
     orders: OrderState = Field(default_factory=OrderState)
     wallet: WalletState = Field(default_factory=WalletState)
     inventory_ledger: list[InventoryLedgerEntry] = Field(default_factory=list)
+    sales: dict[UUID, SaleEvent] = Field(default_factory=dict)
+    views: dict[UUID, ViewEvent] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_document_invariants(self) -> Self:
@@ -194,4 +203,8 @@ class SandboxState(SandboxModel):
             raise ValueError("coupon map keys must match normalized codes")
         if any(key != value.id for key, value in self.owned_media.items()):
             raise ValueError("owned media map keys must match entity IDs")
+        if any(key != value.id for key, value in self.sales.items()):
+            raise ValueError("sales map keys must match entity IDs")
+        if any(key != value.id for key, value in self.views.items()):
+            raise ValueError("views map keys must match entity IDs")
         return self

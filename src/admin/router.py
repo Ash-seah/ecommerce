@@ -283,19 +283,55 @@ async def upload_product_media(
     file: Annotated[UploadFile, File()],
     alt_text: Annotated[str, Form(min_length=1, max_length=300)],
     sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
     x_csrf_token: str | None = Header(default=None),
 ) -> MediaUploadResponse:
     context = await _context(request, x_csrf_token)
     media_service = _media(request)
     data = await file.read(media_service.max_upload_bytes + 1)
     media = await media_service.upload(
-        context.safe_id, data, file.content_type, alt_text, sort_order
+        context.safe_id, data, file.content_type, alt_text, sort_order, is_main=is_main
     )
     try:
         await _service(request).add_media(context.session_id, product_id, media)
     except Exception:
         await media_service.delete(context.safe_id, media.object_key)
         raise
+    return MediaUploadResponse(media=media)
+
+
+@router.post("/variants/{variant_id}/media", response_model=MediaUploadResponse)
+async def upload_variant_media(
+    variant_id: UUID,
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    alt_text: Annotated[str, Form(min_length=1, max_length=300)],
+    sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
+    x_csrf_token: str | None = Header(default=None),
+) -> MediaUploadResponse:
+    context = await _context(request, x_csrf_token)
+    media_service = _media(request)
+    data = await file.read(media_service.max_upload_bytes + 1)
+    media = await media_service.upload(
+        context.safe_id, data, file.content_type, alt_text, sort_order, is_main=is_main
+    )
+    try:
+        await _service(request).add_variant_media(context.session_id, variant_id, media)
+    except Exception:
+        await media_service.delete(context.safe_id, media.object_key)
+        raise
+    return MediaUploadResponse(media=media)
+
+
+@router.post("/media/{media_id}/main", response_model=MediaUploadResponse)
+async def set_media_main(
+    media_id: UUID,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> MediaUploadResponse:
+    context = await _context(request, x_csrf_token)
+    _state, media = await _service(request).set_media_main(context.session_id, media_id)
     return MediaUploadResponse(media=media)
 
 

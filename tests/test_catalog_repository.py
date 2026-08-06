@@ -51,6 +51,7 @@ def _revision() -> CatalogRevision:
         category_id=category_id,
         slug="product",
         name="Product",
+        discount_percent=0,
         is_active=True,
     )
     product.variants = [
@@ -73,6 +74,7 @@ def _revision() -> CatalogRevision:
             alt_text="Product",
             byte_size=10,
             sort_order=0,
+            is_main=True,
             is_active=True,
         )
     ]
@@ -89,7 +91,9 @@ async def test_repository_builds_active_snapshot() -> None:
 
     assert snapshot.revision_number == 2
     assert snapshot.products[0].variants[0].price_minor == 1250
+    assert snapshot.products[0].discount_percent == 0
     assert snapshot.products[0].media[0].object_key == "product.webp"
+    assert snapshot.products[0].media[0].is_main is True
 
 
 @pytest.mark.asyncio

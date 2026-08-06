@@ -28,6 +28,7 @@ from src.commerce.service import CommerceError, CommerceService
 from src.sandbox.models import AddressRecord, OrderRecord
 from src.sandbox.router import SessionContext, _existing_context, _require_csrf
 from src.sandbox.service import CatalogUnavailableError
+from src.views.schemas import ViewRecordRequest, ViewResponse
 
 _T = TypeVar("_T")
 
@@ -115,6 +116,24 @@ async def list_products(
 async def get_product(request: Request, identifier: str) -> ProductView:
     context = await _existing_context(request)
     return await _catalog_call(_service(request).product(context.session_id, identifier))
+
+
+@router.post("/traffic/events", response_model=ViewResponse, status_code=201)
+async def record_traffic_event(
+    body: ViewRecordRequest,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> ViewResponse:
+    """Beacon endpoint for storefront visits, searches, and explicit views."""
+
+    context = await _write_context(request, x_csrf_token)
+    user_agent = request.headers.get("user-agent")
+    event = await _catalog_call(
+        _service(request).record_view(
+            context.session_id, body, user_agent=user_agent
+        )
+    )
+    return ViewResponse(view=event)
 
 
 @router.get("/cart", response_model=CartView)

@@ -44,6 +44,7 @@ class ProductInput(AdminModel):
     category_id: UUID
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
+    discount_percent: Annotated[int, Field(ge=0, le=100)] = 0
 
 
 class VariantInput(AdminModel):

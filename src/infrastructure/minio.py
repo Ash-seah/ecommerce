@@ -117,6 +117,8 @@ class MediaService:
         declared_content_type: str | None,
         alt_text: str,
         sort_order: int,
+        *,
+        is_main: bool = False,
     ) -> MediaSnapshot:
         if len(data) > self.max_upload_bytes:
             raise MediaError(413, "file_too_large", "Upload exceeds the configured size limit")
@@ -151,6 +153,7 @@ class MediaService:
             alt_text=alt_text,
             byte_size=len(data),
             sort_order=sort_order,
+            is_main=is_main,
             url=await self.url(object_key),
         )
 
@@ -162,6 +165,7 @@ class MediaService:
         sort_order: int,
         *,
         object_prefix: str = "catalog/",
+        is_main: bool = False,
     ) -> MediaSnapshot:
         if len(data) > self.max_upload_bytes:
             raise MediaError(413, "file_too_large", "Upload exceeds the configured size limit")
@@ -197,6 +201,7 @@ class MediaService:
             alt_text=alt_text,
             byte_size=len(data),
             sort_order=sort_order,
+            is_main=is_main,
             url=await self.url(object_key, master=True),
         )
 

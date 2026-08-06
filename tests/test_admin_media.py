@@ -14,6 +14,7 @@ from src.admin.schemas import (
     VariantInput,
 )
 from src.admin.service import AdminError, AdminService
+from src.commerce.service import CommerceError
 from src.infrastructure.minio import MediaError, MediaService, MinioProtocol
 
 
@@ -123,12 +124,51 @@ async def test_restore_variant_resets_overlay_inventory_and_tombstone() -> None:
         session_id, variant.id, InventoryAdjustment(operation="set", quantity=1)
     )
     await admin.set_active(session_id, "variants", variant.id, active=False)
+    _state, before = await admin.catalog(session_id)
+    inactive = next(item for item in before.products[0].variants if item.id == variant.id)
+    assert inactive.is_active is False
 
     restored_state, restored = await admin.restore_variant(session_id, variant.id)
     assert restored == variant
+    assert restored.is_active is True
     assert variant.id not in restored_state.variant_overlays
     assert variant.id not in restored_state.variant_tombstones
     assert variant.id not in restored_state.stock_overrides
+
+
+@pytest.mark.asyncio
+async def test_inactive_product_hidden_from_shoppers_visible_to_admin() -> None:
+    sandbox, _redis, _secrets, master = await service_fixture()
+    admin = AdminService(sandbox, default_stock=5)
+    commerce_service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+
+    await admin.set_active(session_id, "products", product.id, active=False)
+
+    _state, admin_catalog = await admin.catalog(session_id)
+    assert any(item.id == product.id for item in admin_catalog.products)
+    admin_product = next(item for item in admin_catalog.products if item.id == product.id)
+    assert admin_product.is_active is False
+
+    page = await commerce_service.products(
+        session_id,
+        page=1,
+        page_size=20,
+        search=None,
+        category=None,
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="name",
+    )
+    assert all(item.id != product.id for item in page.items)
+    with pytest.raises(CommerceError, match="Product"):
+        await commerce_service.product(session_id, str(product.id))
+
+    await admin.set_active(session_id, "products", product.id, active=True)
+    revived = await commerce_service.product(session_id, str(product.id))
+    assert revived.id == product.id
 
 
 @pytest.mark.asyncio
@@ -274,6 +314,28 @@ async def test_add_media_round_trip_keeps_product_identity_fields() -> None:
     assert updated.name == product.name
     assert any(item.id == media.id for item in updated.media)
 
+    other = MediaSnapshot(
+        id=uuid4(),
+        object_key="sandboxes/demo/blue.jpg",
+        content_type="image/jpeg",
+        alt_text="blue shoes",
+        byte_size=10,
+        sort_order=1,
+        is_main=True,
+        url="https://cdn.test/ecommerce-sandboxes/sandboxes/demo/blue.jpg",
+    )
+    _state, updated = await admin.add_media(session_id, product.id, other)
+    assert updated.media[0].id == other.id
+    assert updated.media[0].is_main is True
+    assert all(not item.is_main for item in updated.media if item.id != other.id)
+
+    _state, main = await admin.set_media_main(session_id, media.id)
+    assert main.id == media.id
+    assert main.is_main is True
+    refreshed = await commerce_service.product(session_id, str(product.id))
+    assert refreshed.media[0].id == media.id
+    assert refreshed.media[0].is_main is True
+
     page = await commerce_service.products(
         session_id,
         page=1,
@@ -288,6 +350,15 @@ async def test_add_media_round_trip_keeps_product_identity_fields() -> None:
     assert page.total >= 1
     assert page.items[0].name == product.name
     assert page.items[0].category_id == product.category_id
+
+
+@pytest.mark.asyncio
+async def test_set_media_main_rejects_unknown() -> None:
+    sandbox, _redis, _secrets, _master = await service_fixture()
+    admin = AdminService(sandbox, default_stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    with pytest.raises(AdminError, match="Media"):
+        await admin.set_media_main(session_id, uuid4())
 
 
 @pytest.mark.asyncio

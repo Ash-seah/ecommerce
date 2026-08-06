@@ -76,6 +76,8 @@ async def test_catalog_filters_sort_and_availability_use_merged_state() -> None:
     assert result.total == 1
     assert result.items[0].available is False
     assert result.items[0].variants[0].stock == 0
+    assert result.items[0].stock == 0
+    assert result.items[0].stock == sum(variant.stock for variant in result.items[0].variants)
 
     absent = await service.products(
         session_id,
@@ -89,6 +91,48 @@ async def test_catalog_filters_sort_and_availability_use_merged_state() -> None:
         sort="name",
     )
     assert absent.total == 0
+
+
+@pytest.mark.asyncio
+async def test_product_discount_applies_before_coupon() -> None:
+    sandbox, _redis, _secrets, master = await service_fixture()
+    from src.admin.schemas import ProductInput
+    from src.admin.service import AdminService
+
+    admin = AdminService(sandbox, default_stock=5)
+    service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+    await admin.update_product(
+        session_id,
+        product.id,
+        ProductInput(
+            category_id=product.category_id,
+            name=product.name,
+            description=product.description,
+            discount_percent=35,
+        ),
+    )
+    view = await service.product(session_id, str(product.id))
+    assert view.discount_percent == 35
+    assert view.variants[0].list_price_minor == 100
+    assert view.variants[0].price_minor == 65
+    assert view.price_min_minor == 65
+
+    shipping = address()
+    await service.put_address(session_id, shipping)
+    await service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
+    await service.change_cart(session_id, product.variants[0].id, 2, add=False)
+    cart = await service.cart(session_id)
+    assert cart.lines[0].list_price_minor == 100
+    assert cart.lines[0].unit_price_minor == 65
+    assert cart.subtotal_minor == 130
+
+    order = await service.checkout(session_id, shipping.id, "SAVE10", "sale-coupon")
+    assert order.subtotal_minor == 130
+    assert order.discount_minor == 13
+    assert order.lines[0].unit_price_minor == 65
+    assert order.total_minor == 117
 
 
 @pytest.mark.asyncio

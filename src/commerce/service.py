@@ -1,6 +1,7 @@
 """Commerce domain services over the atomic sandbox document."""
 
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -27,7 +28,10 @@ from src.commerce.schemas import (
     ProductView,
     VariantView,
 )
-from src.sandbox.merge import merge_catalog
+from src.sales.capture import build_checkout_sales, void_sales_for_order
+from src.sales.repository import MasterSalesRepository
+from src.sales.schemas import SaleEvent
+from src.sandbox.merge import merge_catalog, storefront_catalog
 from src.sandbox.models import (
     AddressRecord,
     CartLine,
@@ -39,6 +43,13 @@ from src.sandbox.models import (
     WalletLedgerEntry,
 )
 from src.sandbox.service import SandboxService
+from src.views.capture import (
+    auto_category_view,
+    auto_product_view,
+    enrich_record_request,
+)
+from src.views.repository import MasterViewsRepository
+from src.views.schemas import ViewEvent, ViewRecordRequest
 
 
 class CommerceError(Exception):
@@ -46,6 +57,14 @@ class CommerceError(Exception):
         self.status_code = status_code
         self.code = code
         self.message = message
+
+
+def sale_price_minor(list_price_minor: int, discount_percent: int) -> int:
+    """Apply a product percent-off to a list price in minor units."""
+
+    if discount_percent <= 0:
+        return list_price_minor
+    return list_price_minor * (100 - discount_percent) // 100
 
 
 class CouponPolicy(Protocol):
@@ -155,10 +174,50 @@ class CommerceService:
         sandbox: SandboxService,
         pricing: PricingService,
         limits: CommerceLimits,
+        master_sales: MasterSalesRepository | None = None,
+        master_views: MasterViewsRepository | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._pricing = pricing
         self._limits = limits
+        self._master_sales = master_sales
+        self._master_views = master_views
+
+    async def _persist_view(self, session_id: str, event: ViewEvent) -> ViewEvent:
+        def mutation(state: SandboxState) -> SandboxState:
+            views = dict(state.views)
+            views[event.id] = event
+            return state.model_copy(update={"views": views})
+
+        await self._sandbox.mutate(session_id, mutation)
+        if self._master_views is not None:
+            with suppress(Exception):
+                await self._master_views.insert_many([event])
+        return event
+
+    async def record_view(
+        self,
+        session_id: str,
+        body: ViewRecordRequest,
+        *,
+        user_agent: str | None = None,
+    ) -> ViewEvent:
+        _state, catalog = await self._state_catalog(session_id)
+        if body.product_id is not None and not any(
+            item.id == body.product_id for item in catalog.products
+        ):
+            raise CommerceError(404, "product_not_found", "Product was not found")
+        if body.category_id is not None and not any(
+            item.id == body.category_id for item in catalog.categories
+        ):
+            raise CommerceError(404, "category_not_found", "Category was not found")
+        event = enrich_record_request(
+            body,
+            catalog,
+            sandbox_session_id=session_id,
+            user_agent=user_agent,
+        )
+        return await self._persist_view(session_id, event)
 
     @staticmethod
     def _variants(
@@ -188,23 +247,28 @@ class CommerceService:
                 id=variant.id,
                 sku=variant.sku,
                 name=variant.name,
-                price_minor=variant.price_minor,
+                list_price_minor=variant.price_minor,
+                price_minor=sale_price_minor(variant.price_minor, product.discount_percent),
                 currency=variant.currency,
                 stock=self._stock(state, variant.id),
                 available=self._stock(state, variant.id) > 0,
+                media=variant.media,
             )
             for variant in product.variants
         )
-        prices = [variant.price_minor for variant in product.variants]
+        prices = [variant.price_minor for variant in variants]
+        stock = sum(variant.stock for variant in variants)
         return ProductView(
             id=product.id,
             category_id=product.category_id,
             slug=product.slug,
             name=product.name,
             description=product.description,
+            discount_percent=product.discount_percent,
             variants=variants,
             media=product.media,
             available=any(variant.available for variant in variants),
+            stock=stock,
             price_min_minor=min(prices),
             price_max_minor=max(prices),
             currency=next(iter(currencies)),
@@ -213,7 +277,7 @@ class CommerceService:
     async def _state_catalog(self, session_id: str) -> tuple[SandboxState, CatalogSnapshot]:
         state = await self._sandbox.inspect(session_id)
         master = await self._sandbox.master_catalog(state.pinned_master_revision)
-        return state, merge_catalog(master, state)
+        return state, storefront_catalog(merge_catalog(master, state))
 
     async def categories(self, session_id: str, page: int, page_size: int) -> CategoryPage:
         _state, catalog = await self._state_catalog(session_id)
@@ -227,6 +291,19 @@ class CommerceService:
         node = category_subtree(catalog.categories, identifier)
         if node is None:
             raise CommerceError(404, "category_not_found", "Category was not found")
+        snapshot = next(
+            (
+                item
+                for item in catalog.categories
+                if str(item.id) == identifier or item.slug == identifier
+            ),
+            None,
+        )
+        if snapshot is not None:
+            await self._persist_view(
+                session_id,
+                auto_category_view(snapshot, sandbox_session_id=session_id),
+            )
         return node
 
     async def products(
@@ -283,7 +360,12 @@ class CommerceService:
             if str(product.id) == identifier or product.slug == identifier:
                 if not product.variants:
                     break
-                return self._product_view(product, state)
+                view = self._product_view(product, state)
+                await self._persist_view(
+                    session_id,
+                    auto_product_view(product, catalog, sandbox_session_id=session_id),
+                )
+                return view
         raise CommerceError(404, "product_not_found", "Product was not found")
 
     def _resolved_cart(
@@ -311,8 +393,10 @@ class CommerceService:
                 product_name=product.name,
                 variant_name=variant.name,
                 quantity=quantity,
-                unit_price_minor=variant.price_minor,
-                line_total_minor=variant.price_minor * quantity,
+                list_price_minor=variant.price_minor,
+                unit_price_minor=sale_price_minor(variant.price_minor, product.discount_percent),
+                line_total_minor=sale_price_minor(variant.price_minor, product.discount_percent)
+                * quantity,
                 currency=variant.currency,
                 stock=self._stock(state, variant.id),
             )
@@ -341,7 +425,7 @@ class CommerceService:
         master = await self._sandbox.master_catalog(initial.pinned_master_revision)
 
         def mutation(state: SandboxState) -> SandboxState:
-            catalog = merge_catalog(master, state)
+            catalog = storefront_catalog(merge_catalog(master, state))
             item = self._variants(catalog).get(variant_id)
             if item is None:
                 raise CommerceError(404, "variant_not_found", "Variant was not found")
@@ -365,7 +449,7 @@ class CommerceService:
             return state.model_copy(update={"cart": state.cart.model_copy(update={"lines": lines})})
 
         state = await self._sandbox.mutate(session_id, mutation)
-        return self._cart_view(state, merge_catalog(master, state))
+        return self._cart_view(state, storefront_catalog(merge_catalog(master, state)))
 
     async def remove_cart(self, session_id: str, variant_id: UUID) -> CartView:
         initial = await self._sandbox.inspect(session_id)
@@ -378,7 +462,7 @@ class CommerceService:
             return state.model_copy(update={"cart": state.cart.model_copy(update={"lines": lines})})
 
         state = await self._sandbox.mutate(session_id, mutation)
-        return self._cart_view(state, merge_catalog(master, state))
+        return self._cart_view(state, storefront_catalog(merge_catalog(master, state)))
 
     async def clear_cart(self, session_id: str) -> CartView:
         state = await self._sandbox.mutate(
@@ -388,7 +472,7 @@ class CommerceService:
             ),
         )
         catalog = await self._sandbox.master_catalog(state.pinned_master_revision)
-        return self._cart_view(state, merge_catalog(catalog, state))
+        return self._cart_view(state, storefront_catalog(merge_catalog(catalog, state)))
 
     async def wishlist(self, session_id: str) -> tuple[ProductView, ...]:
         state, catalog = await self._state_catalog(session_id)
@@ -500,6 +584,7 @@ class CommerceService:
         initial = await self._sandbox.inspect(session_id)
         master = await self._sandbox.master_catalog(initial.pinned_master_revision)
         result: list[OrderRecord] = []
+        captured: list[SaleEvent] = []
 
         def mutation(state: SandboxState) -> SandboxState:
             replay_id = state.orders.idempotency_keys.get(idempotency_key)
@@ -509,7 +594,7 @@ class CommerceService:
             address = state.addresses.addresses.get(address_id)
             if address is None:
                 raise CommerceError(404, "address_not_found", "Address was not found")
-            catalog = merge_catalog(master, state)
+            catalog = storefront_catalog(merge_catalog(master, state))
             resolved, currency = self._resolved_cart(state, catalog)
             if not resolved:
                 raise CommerceError(409, "empty_cart", "Cart is empty")
@@ -522,7 +607,10 @@ class CommerceService:
                         "insufficient_stock",
                         f"Insufficient stock for {variant.sku}",
                     )
-            subtotal = sum(variant.price_minor * quantity for _, variant, quantity in resolved)
+            subtotal = sum(
+                sale_price_minor(variant.price_minor, product.discount_percent) * quantity
+                for product, variant, quantity in resolved
+            )
             pricing = self._pricing.calculate(
                 currency=currency,
                 subtotal_minor=subtotal,
@@ -540,8 +628,13 @@ class CommerceService:
                     product_name=product.name,
                     variant_name=variant.name,
                     quantity=quantity,
-                    unit_price_minor=variant.price_minor,
-                    line_total_minor=variant.price_minor * quantity,
+                    unit_price_minor=sale_price_minor(
+                        variant.price_minor, product.discount_percent
+                    ),
+                    line_total_minor=sale_price_minor(
+                        variant.price_minor, product.discount_percent
+                    )
+                    * quantity,
                 )
                 for product, variant, quantity in resolved
             )
@@ -591,6 +684,16 @@ class CommerceService:
                     )
                 )
             result.append(order)
+            sale_events = build_checkout_sales(
+                order=order,
+                resolved=resolved,
+                catalog=catalog,
+                sandbox_session_id=session_id,
+            )
+            sales = dict(state.sales)
+            for event in sale_events:
+                sales[event.id] = event
+            captured.extend(sale_events)
             return state.model_copy(
                 update={
                     "orders": state.orders.model_copy(
@@ -608,10 +711,15 @@ class CommerceService:
                         *inventory_entries,
                     ],
                     "cart": state.cart.model_copy(update={"lines": []}),
+                    "sales": sales,
                 }
             )
 
         await self._sandbox.mutate(session_id, mutation)
+        if self._master_sales is not None and captured:
+            # Sandbox ledger wins; master fan-out is best-effort for the demo.
+            with suppress(Exception):
+                await self._master_sales.insert_many(captured)
         return result[-1]
 
     async def orders(
@@ -675,6 +783,12 @@ class CommerceService:
                     )
                 )
             result.append(updated)
+            sales = void_sales_for_order(
+                state.sales,
+                order_id,
+                reason=f"order_{status}",
+                at=now,
+            )
             return state.model_copy(
                 update={
                     "orders": state.orders.model_copy(update={"orders": orders}),
@@ -689,8 +803,12 @@ class CommerceService:
                         *state.inventory_ledger,
                         *inventory_entries,
                     ],
+                    "sales": sales,
                 }
             )
 
         await self._sandbox.mutate(session_id, mutation)
+        if self._master_sales is not None:
+            with suppress(Exception):
+                await self._master_sales.void_order(order_id, reason=f"order_{action}")
         return result[-1]

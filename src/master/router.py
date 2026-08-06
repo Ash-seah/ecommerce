@@ -121,6 +121,7 @@ async def upload_product_media(
     file: Annotated[UploadFile, File()],
     alt_text: Annotated[str, Form(min_length=1, max_length=300)] = "Product image",
     sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
 ) -> MediaResponse:
     payload = await file.read()
     media = await _service(request).attach_media(
@@ -129,7 +130,38 @@ async def upload_product_media(
         file.content_type,
         alt_text,
         sort_order,
+        is_main=is_main,
     )
+    return MediaResponse(media=media)
+
+
+@router.post("/variants/{variant_id}/media", response_model=MediaResponse)
+async def upload_variant_media(
+    variant_id: UUID,
+    request: Request,
+    _admin: AdminUser,
+    file: Annotated[UploadFile, File()],
+    alt_text: Annotated[str, Form(min_length=1, max_length=300)] = "Variant image",
+    sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
+) -> MediaResponse:
+    payload = await file.read()
+    media = await _service(request).attach_variant_media(
+        variant_id,
+        payload,
+        file.content_type,
+        alt_text,
+        sort_order,
+        is_main=is_main,
+    )
+    return MediaResponse(media=media)
+
+
+@router.post("/media/{media_id}/main", response_model=MediaResponse)
+async def set_media_main(
+    media_id: UUID, request: Request, _admin: AdminUser
+) -> MediaResponse:
+    media = await _service(request).set_media_main(media_id)
     return MediaResponse(media=media)
 
 

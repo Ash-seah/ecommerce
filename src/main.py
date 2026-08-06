@@ -32,9 +32,17 @@ from src.infrastructure.minio import MediaService, MinioProtocol
 from src.infrastructure.redis import RedisClient
 from src.master.router import router as master_router
 from src.master.service import MasterCatalogService
+from src.sales.admin_router import router as admin_sales_router
+from src.sales.master_router import router as master_sales_router
+from src.sales.repository import MasterSalesRepository
+from src.sales.service import MasterSalesService, SandboxSalesService
 from src.sandbox.router import router as sandbox_router
 from src.sandbox.security import SessionSecrets
 from src.sandbox.service import RedisProtocol, SandboxService
+from src.views.admin_router import router as admin_views_router
+from src.views.master_router import router as master_views_router
+from src.views.repository import MasterViewsRepository
+from src.views.service import MasterViewsService, SandboxViewsService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -91,6 +99,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_service = AdminService(
         sandbox_service, default_stock=resolved_settings.demo_stock_default
     )
+    master_sales_repository = MasterSalesRepository(owner_database.session_factory)
+    master_views_repository = MasterViewsRepository(owner_database.session_factory)
     commerce_service = CommerceService(
         sandbox_service,
         PricingService(
@@ -107,7 +117,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             address_max=resolved_settings.address_max,
             default_stock=resolved_settings.demo_stock_default,
         ),
+        master_sales=master_sales_repository,
+        master_views=master_views_repository,
     )
+    sandbox_sales_service = SandboxSalesService(sandbox_service)
+    master_sales_service = MasterSalesService(master_sales_repository)
+    sandbox_views_service = SandboxViewsService(sandbox_service)
+    master_views_service = MasterViewsService(master_views_repository)
     master_service = MasterCatalogService(
         owner_database.session_factory,
         media_service,
@@ -143,6 +159,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "name": "master",
                 "description": "JWT-protected master PostgreSQL and MinIO catalog editing.",
             },
+            {
+                "name": "admin-sales",
+                "description": "Sandbox sales ledger, live feed, and session analytics.",
+            },
+            {
+                "name": "master-sales",
+                "description": "Durable cross-sandbox sales ledger and super-admin analytics.",
+            },
+            {
+                "name": "admin-views",
+                "description": "Sandbox visit/view ledger, live feed, and traffic analytics.",
+            },
+            {
+                "name": "master-views",
+                "description": "Durable cross-sandbox traffic ledger and super-admin analytics.",
+            },
         ],
         root_path=resolved_settings.root_path,
         lifespan=lifespan,
@@ -159,6 +191,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.media_service = media_service
     application.state.commerce_service = commerce_service
     application.state.master_service = master_service
+    application.state.sandbox_sales_service = sandbox_sales_service
+    application.state.master_sales_service = master_sales_service
+    application.state.sandbox_views_service = sandbox_views_service
+    application.state.master_views_service = master_views_service
     application.state.started = False
     application.add_middleware(
         CORSMiddleware,
@@ -178,7 +214,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(sandbox_router)
     application.include_router(commerce_router)
     application.include_router(admin_router)
+    application.include_router(admin_sales_router)
+    application.include_router(admin_views_router)
     application.include_router(master_router)
+    application.include_router(master_sales_router)
+    application.include_router(master_views_router)
     install_exception_handlers(application)
 
     @application.get(

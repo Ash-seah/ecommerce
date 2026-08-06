@@ -17,6 +17,8 @@ from src.catalog.schemas import (
     MediaSnapshot,
     ProductSnapshot,
     VariantSnapshot,
+    with_main_media,
+    with_media_appended,
 )
 from src.sandbox.merge import merge_catalog
 from src.sandbox.models import (
@@ -320,6 +322,7 @@ class AdminService:
             variant = VariantSnapshot(
                 id=variant_id,
                 sku=self._allocate_short_id(catalog),
+                media=(),
                 **body.model_dump(),
             )
             custom = dict(state.custom_variants)
@@ -435,51 +438,60 @@ class AdminService:
     async def set_active(
         self, session_id: str, entity: str, entity_id: UUID, *, active: bool
     ) -> SandboxState:
+        """Soft-hide for shoppers while keeping the entity in the admin catalog.
+
+        Deletes still use tombstones. Active/inactive is an overlay (or custom entity) flag.
+        """
+
         master = await self._master(session_id)
 
         def mutation(state: SandboxState) -> SandboxState:
             catalog = merge_catalog(master, state)
-            field: str
             if entity == "categories":
-                if active:
-                    known = {item.id for item in master.categories} | set(state.custom_categories)
-                    if entity_id not in known:
-                        raise AdminError(404, "category_not_found", "Category was not found")
-                else:
-                    self._category(catalog, entity_id)
-                field = "category_tombstones"
-            elif entity == "products":
-                if active:
-                    known = {item.id for item in master.products} | set(state.custom_products)
-                    if entity_id not in known:
-                        raise AdminError(404, "product_not_found", "Product was not found")
-                else:
-                    product = self._product(catalog, entity_id)
+                category = self._category(catalog, entity_id)
+                if entity_id in state.custom_categories:
+                    custom = dict(state.custom_categories)
+                    custom[entity_id] = category.model_copy(update={"is_active": active})
+                    return state.model_copy(update={"custom_categories": custom})
+                overlays = dict(state.category_overlays)
+                existing = overlays.get(entity_id, CategoryOverlay())
+                overlays[entity_id] = existing.model_copy(update={"is_active": active})
+                return state.model_copy(update={"category_overlays": overlays})
+            if entity == "products":
+                product = self._product(catalog, entity_id)
+                if not active:
                     variant_ids = {item.id for item in product.variants}
                     if any(line.variant_id in variant_ids for line in state.cart.lines):
-                        raise AdminError(409, "product_in_cart", "Remove product from cart first")
-                field = "product_tombstones"
-            elif entity == "variants":
-                if active:
-                    master_variants = {
-                        item.id for product in master.products for item in product.variants
-                    }
-                    if entity_id not in master_variants | set(state.custom_variants):
-                        raise AdminError(404, "variant_not_found", "Variant was not found")
-                else:
-                    product, _variant = self._variant(catalog, entity_id)
-                    if any(line.variant_id == entity_id for line in state.cart.lines):
-                        raise AdminError(409, "variant_in_cart", "Remove variant from cart first")
-                    if len(product.variants) == 1:
-                        raise AdminError(409, "last_variant", "A product must retain one variant")
-                field = "variant_tombstones"
-            else:
-                raise AdminError(404, "entity_not_found", "Entity type was not found")
-            tombstones = set(getattr(state, field))
-            tombstones.discard(entity_id) if active else tombstones.add(entity_id)
-            updated = state.model_copy(update={field: tombstones})
-            self._validate_catalog(merge_catalog(master, updated))
-            return updated
+                        raise AdminError(
+                            409, "product_in_cart", "Remove product from cart first"
+                        )
+                if entity_id in state.custom_products:
+                    custom = dict(state.custom_products)
+                    custom[entity_id] = product.model_copy(update={"is_active": active})
+                    return state.model_copy(update={"custom_products": custom})
+                overlays = dict(state.product_overlays)
+                existing = overlays.get(entity_id, ProductOverlay())
+                overlays[entity_id] = existing.model_copy(update={"is_active": active})
+                return state.model_copy(update={"product_overlays": overlays})
+            if entity == "variants":
+                product, variant = self._variant(catalog, entity_id)
+                if not active and any(
+                    line.variant_id == entity_id for line in state.cart.lines
+                ):
+                    raise AdminError(409, "variant_in_cart", "Remove variant from cart first")
+                del product
+                if entity_id in state.custom_variants:
+                    custom = dict(state.custom_variants)
+                    record = custom[entity_id]
+                    custom[entity_id] = record.model_copy(
+                        update={"variant": variant.model_copy(update={"is_active": active})}
+                    )
+                    return state.model_copy(update={"custom_variants": custom})
+                overlays = dict(state.variant_overlays)
+                existing = overlays.get(entity_id, VariantOverlay())
+                overlays[entity_id] = existing.model_copy(update={"is_active": active})
+                return state.model_copy(update={"variant_overlays": overlays})
+            raise AdminError(404, "entity_not_found", "Entity type was not found")
 
         return await self._sandbox.mutate(session_id, mutation)
 
@@ -526,9 +538,7 @@ class AdminService:
             product = self._product(catalog, product_id)
             owned = dict(state.owned_media)
             owned[media.id] = media
-            updated_media = tuple(
-                sorted((*product.media, media), key=lambda item: (item.sort_order, str(item.id)))
-            )
+            updated_media = with_media_appended(product.media, media)
             if product_id in state.custom_products:
                 custom = dict(state.custom_products)
                 custom[product_id] = product.model_copy(update={"media": updated_media})
@@ -541,6 +551,86 @@ class AdminService:
         state, catalog = await self._mutate_catalog(session_id, change)
         return state, self._product(catalog, product_id)
 
+    async def add_variant_media(
+        self, session_id: str, variant_id: UUID, media: MediaSnapshot
+    ) -> tuple[SandboxState, VariantSnapshot]:
+        def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            _product, variant = self._variant(catalog, variant_id)
+            owned = dict(state.owned_media)
+            owned[media.id] = media
+            updated_media = with_media_appended(variant.media, media)
+            if variant_id in state.custom_variants:
+                custom = dict(state.custom_variants)
+                record = custom[variant_id]
+                custom[variant_id] = record.model_copy(
+                    update={"variant": variant.model_copy(update={"media": updated_media})}
+                )
+                return state.model_copy(update={"custom_variants": custom, "owned_media": owned})
+            overlays = dict(state.variant_overlays)
+            existing = overlays.get(variant_id, VariantOverlay())
+            overlays[variant_id] = existing.model_copy(update={"media": updated_media})
+            return state.model_copy(update={"variant_overlays": overlays, "owned_media": owned})
+
+        state, catalog = await self._mutate_catalog(session_id, change)
+        return state, self._variant(catalog, variant_id)[1]
+
+    async def set_media_main(
+        self, session_id: str, media_id: UUID
+    ) -> tuple[SandboxState, MediaSnapshot]:
+        result: list[MediaSnapshot] = []
+
+        def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            for product in catalog.products:
+                updated = with_main_media(product.media, media_id)
+                if updated is not None:
+                    main = next(item for item in updated if item.id == media_id)
+                    result.append(main)
+                    owned = dict(state.owned_media)
+                    if media_id in owned:
+                        owned[media_id] = main
+                    if product.id in state.custom_products:
+                        custom = dict(state.custom_products)
+                        custom[product.id] = product.model_copy(update={"media": updated})
+                        return state.model_copy(
+                            update={"custom_products": custom, "owned_media": owned}
+                        )
+                    overlays = dict(state.product_overlays)
+                    existing = overlays.get(product.id, ProductOverlay())
+                    overlays[product.id] = existing.model_copy(update={"media": updated})
+                    return state.model_copy(
+                        update={"product_overlays": overlays, "owned_media": owned}
+                    )
+                for variant in product.variants:
+                    updated_variant = with_main_media(variant.media, media_id)
+                    if updated_variant is None:
+                        continue
+                    main = next(item for item in updated_variant if item.id == media_id)
+                    result.append(main)
+                    owned = dict(state.owned_media)
+                    if media_id in owned:
+                        owned[media_id] = main
+                    if variant.id in state.custom_variants:
+                        custom = dict(state.custom_variants)
+                        record = custom[variant.id]
+                        custom[variant.id] = record.model_copy(
+                            update={
+                                "variant": variant.model_copy(update={"media": updated_variant})
+                            }
+                        )
+                        return state.model_copy(
+                            update={"custom_variants": custom, "owned_media": owned}
+                        )
+                    overlays = dict(state.variant_overlays)
+                    existing = overlays.get(variant.id, VariantOverlay())
+                    overlays[variant.id] = existing.model_copy(update={"media": updated_variant})
+                    return state.model_copy(
+                        update={"variant_overlays": overlays, "owned_media": owned}
+                    )
+            raise AdminError(404, "media_not_found", "Media was not found")
+
+        state, _catalog = await self._mutate_catalog(session_id, change)
+        return state, result[0]
+
     async def remove_media(
         self, session_id: str, media_id: UUID
     ) -> tuple[SandboxState, MediaSnapshot]:
@@ -550,24 +640,48 @@ class AdminService:
             media = state.owned_media.get(media_id)
             if media is None:
                 raise AdminError(404, "media_not_found", "Owned media was not found")
-            product = next(
-                (item for item in catalog.products if any(m.id == media_id for m in item.media)),
-                None,
-            )
             owned = dict(state.owned_media)
             del owned[media_id]
             removed.append(media)
-            if product is None:
-                return state.model_copy(update={"owned_media": owned})
-            updated_media = tuple(item for item in product.media if item.id != media_id)
-            if product.id in state.custom_products:
-                custom = dict(state.custom_products)
-                custom[product.id] = product.model_copy(update={"media": updated_media})
-                return state.model_copy(update={"custom_products": custom, "owned_media": owned})
-            overlays = dict(state.product_overlays)
-            existing = overlays.get(product.id, ProductOverlay())
-            overlays[product.id] = existing.model_copy(update={"media": updated_media})
-            return state.model_copy(update={"product_overlays": overlays, "owned_media": owned})
+
+            for product in catalog.products:
+                if any(item.id == media_id for item in product.media):
+                    updated_media = tuple(item for item in product.media if item.id != media_id)
+                    if product.id in state.custom_products:
+                        custom = dict(state.custom_products)
+                        custom[product.id] = product.model_copy(update={"media": updated_media})
+                        return state.model_copy(
+                            update={"custom_products": custom, "owned_media": owned}
+                        )
+                    overlays = dict(state.product_overlays)
+                    existing = overlays.get(product.id, ProductOverlay())
+                    overlays[product.id] = existing.model_copy(update={"media": updated_media})
+                    return state.model_copy(
+                        update={"product_overlays": overlays, "owned_media": owned}
+                    )
+                for variant in product.variants:
+                    if any(item.id == media_id for item in variant.media):
+                        updated_media = tuple(
+                            item for item in variant.media if item.id != media_id
+                        )
+                        if variant.id in state.custom_variants:
+                            custom = dict(state.custom_variants)
+                            record = custom[variant.id]
+                            custom[variant.id] = record.model_copy(
+                                update={
+                                    "variant": variant.model_copy(update={"media": updated_media})
+                                }
+                            )
+                            return state.model_copy(
+                                update={"custom_variants": custom, "owned_media": owned}
+                            )
+                        overlays = dict(state.variant_overlays)
+                        existing = overlays.get(variant.id, VariantOverlay())
+                        overlays[variant.id] = existing.model_copy(update={"media": updated_media})
+                        return state.model_copy(
+                            update={"variant_overlays": overlays, "owned_media": owned}
+                        )
+            return state.model_copy(update={"owned_media": owned})
 
         state, _catalog = await self._mutate_catalog(session_id, change)
         return state, removed[-1]

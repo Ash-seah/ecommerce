@@ -86,6 +86,10 @@ class Product(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("revision_id", "slug", name="uq_catalog_products_revision_slug"),
         CheckConstraint("length(slug) > 0", name="ck_catalog_products_slug_not_empty"),
+        CheckConstraint(
+            "discount_percent >= 0 AND discount_percent <= 100",
+            name="ck_catalog_products_discount_percent",
+        ),
         Index("ix_catalog_products_revision_active", "revision_id", "is_active"),
         Index("ix_catalog_products_category", "category_id"),
     )
@@ -100,6 +104,7 @@ class Product(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(120), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     revision: Mapped[CatalogRevision] = relationship(back_populates="products")
@@ -131,6 +136,7 @@ class ProductVariant(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     product: Mapped[Product] = relationship(back_populates="variants")
+    media: Mapped[list[MediaMetadata]] = relationship(back_populates="variant")
 
 
 class MediaMetadata(Base, TimestampMixin):
@@ -140,17 +146,28 @@ class MediaMetadata(Base, TimestampMixin):
         CheckConstraint("byte_size >= 0", name="ck_catalog_media_size_nonnegative"),
         CheckConstraint("sort_order >= 0", name="ck_catalog_media_sort_nonnegative"),
         Index("ix_catalog_media_product_active", "product_id", "is_active"),
+        Index(
+            "ix_catalog_media_variant_active",
+            "variant_id",
+            "is_active",
+            postgresql_where=text("variant_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
     )
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_variants.id", ondelete="CASCADE")
+    )
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     alt_text: Mapped[str] = mapped_column(String(240), nullable=False)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     product: Mapped[Product] = relationship(back_populates="media")
+    variant: Mapped[ProductVariant | None] = relationship(back_populates="media")
