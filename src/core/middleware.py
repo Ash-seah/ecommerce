@@ -162,7 +162,10 @@ class RequestMiddleware(BaseHTTPMiddleware):
                 chunks.append(chunk)
             request._body = b"".join(chunks)
 
-        if request.url.path.startswith("/v1/"):
+        # Master JWT write/seed traffic is operator-only; do not share the public rate bucket.
+        path = request.url.path
+        master_path = path == "/v1/master" or path.startswith("/v1/master/")
+        if path.startswith("/v1/") and not master_path:
             client = request.client.host if request.client else "unknown"
             digest = hashlib.sha256(client.encode()).hexdigest()[:32]
             key = f"{settings.redis_key_prefix}:rate:{digest}"
@@ -177,7 +180,7 @@ class RequestMiddleware(BaseHTTPMiddleware):
                             "event": "rate_limit_unavailable",
                             "request_id": request_id,
                             "method": request.method,
-                            "path": request.url.path,
+                            "path": path,
                         },
                         separators=(",", ":"),
                     )

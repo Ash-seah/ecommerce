@@ -151,6 +151,18 @@ async def test_rate_limit_and_metrics_use_bounded_labels(client: httpx.AsyncClie
 
 
 @pytest.mark.asyncio
+async def test_master_routes_skip_rate_limit(client: httpx.AsyncClient) -> None:
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.redis = RateProbe(count=10_000)
+    login = await client.post(
+        "/v1/master/auth/login",
+        json={"username": "admin", "password": "admin123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["token_type"] == "bearer"
+
+
+@pytest.mark.asyncio
 async def test_readiness_checks_every_dependency_without_exposing_errors(
     client: httpx.AsyncClient,
 ) -> None:
