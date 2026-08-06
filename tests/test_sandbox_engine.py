@@ -337,6 +337,20 @@ async def test_cookie_flags_origin_bound_csrf_and_rotation() -> None:
         )
         assert rejected_old.status_code == 403
 
+        inspected = await client.get(
+            "/v1/sandbox/session",
+            headers={"Origin": "https://client.test"},
+        )
+        assert inspected.status_code == 200
+        inspect_token = inspected.json()["csrf_token"]
+        assert inspect_token
+        assert inspect_token != rotated.json()["csrf_token"]
+        after_inspect = await client.post(
+            "/v1/sandbox/session/refresh",
+            headers={"Origin": "https://client.test", "X-CSRF-Token": inspect_token},
+        )
+        assert after_inspect.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_swagger_can_omit_origin_when_host_matches_cors() -> None:

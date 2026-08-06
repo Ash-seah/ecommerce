@@ -34,7 +34,8 @@ Interactive OpenAPI is at <http://localhost:8001/docs>; the schema is
 
 - Health/monitoring: `GET /health/live`, `GET /health/ready`, `GET /metrics`.
 - Sandbox: create/inspect, refresh, reset, and rotate CSRF under
-  `/v1/sandbox/session`; merged catalog at `/v1/sandbox/catalog`.
+  `/v1/sandbox/session` (prefer `GET /session` on app load — returns CSRF;
+  creates only if no cookie); merged catalog at `/v1/sandbox/catalog`.
 - Catalog: paginated categories and products, lookup, search, filters, availability,
   and sorting under `/v1/catalog`.
 - Cart and wishlist: `/v1/cart`, `/v1/cart/items`, `/v1/wishlist`,
@@ -199,7 +200,7 @@ parse JSON:
 ```bash
 ORIGIN=http://localhost:3000
 curl -sS -c cookies.txt -H "Origin: $ORIGIN" \
-  http://localhost:8001/v1/sandbox/session/create > session.json
+  http://localhost:8001/v1/sandbox/session > session.json
 CSRF=$(jq -r .csrf_token session.json)
 curl -sS -b cookies.txt -H "Origin: $ORIGIN" -H "X-CSRF-Token: $CSRF" \
   -H "Content-Type: application/json" \
@@ -217,7 +218,7 @@ PowerShell's web session is the cookie jar:
 $origin = 'http://localhost:3000'
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 $created = Invoke-RestMethod -WebSession $session -Headers @{ Origin = $origin } `
-  http://localhost:8001/v1/sandbox/session/create
+  http://localhost:8001/v1/sandbox/session
 $headers = @{ Origin = $origin; 'X-CSRF-Token' = $created.csrf_token }
 Invoke-RestMethod -Method Post -WebSession $session -Headers $headers `
   -ContentType 'application/json' `

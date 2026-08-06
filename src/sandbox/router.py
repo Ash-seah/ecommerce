@@ -168,15 +168,24 @@ async def create_session(request: Request, response: Response) -> SandboxRespons
 
 @router.get("/session", response_model=SandboxResponse)
 async def inspect_session(request: Request, response: Response) -> SandboxResponse:
+    """Return the current sandbox, or create one if missing.
+
+    Always includes a CSRF token so SPAs can boot with inspect-only on refresh.
+    For an existing session the nonce is rotated (previous token stops working).
+    """
     session_id = request.cookies.get(_settings(request).session_cookie_name)
     if session_id is None:
         return await _create(request, response)
     try:
-        state = await _service(request).inspect(session_id)
+        nonce, state = await _service(request).rotate_csrf(session_id)
     except SandboxNotFoundError:
         return await _create(request, response)
+    except MutationConflictError as exc:
+        raise SandboxAPIError(409, "mutation_conflict", str(exc)) from exc
+    safe_id = _service(request).safe_id(session_id)
+    token = _secrets(request).issue_csrf(safe_id, _request_origin(request), nonce)
     _set_session_cookie(response, session_id, _settings(request))
-    return SandboxResponse(state=state)
+    return SandboxResponse(state=state, csrf_token=token)
 
 
 @router.post("/session/refresh", response_model=SandboxResponse)
