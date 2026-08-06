@@ -61,6 +61,19 @@ class MasterCatalogService:
                 return candidate
         raise MasterError(500, "slug_allocate_failed", "Could not allocate a unique short id")
 
+    async def _unique_variant_code(self, session: AsyncSession, product_id: UUID) -> str:
+        for _ in range(8):
+            candidate = short_uuid()
+            exists = await session.scalar(
+                select(ProductVariant.id).where(
+                    ProductVariant.product_id == product_id,
+                    ProductVariant.sku == candidate,
+                )
+            )
+            if exists is None:
+                return candidate
+        raise MasterError(500, "sku_allocate_failed", "Could not allocate a unique short id")
+
     async def _active_revision(self, session: AsyncSession) -> CatalogRevision:
         revision = await session.scalar(
             select(CatalogRevision).where(CatalogRevision.is_active.is_(True))
@@ -177,18 +190,10 @@ class MasterCatalogService:
             product = await session.get(Product, body.product_id)
             if product is None:
                 raise MasterError(404, "product_not_found", "Product was not found")
-            exists = await session.scalar(
-                select(ProductVariant.id).where(
-                    ProductVariant.product_id == body.product_id,
-                    ProductVariant.sku == body.sku,
-                )
-            )
-            if exists is not None:
-                raise MasterError(409, "sku_conflict", "SKU already exists on this product")
             variant = ProductVariant(
                 id=uuid4(),
                 product_id=body.product_id,
-                sku=body.sku,
+                sku=await self._unique_variant_code(session, body.product_id),
                 name=body.name,
                 price_minor=body.price_minor,
                 currency=body.currency,
@@ -206,16 +211,6 @@ class MasterCatalogService:
             if variant is None:
                 raise MasterError(404, "variant_not_found", "Variant was not found")
             data = body.model_dump(exclude_unset=True)
-            if "sku" in data and data["sku"] != variant.sku:
-                exists = await session.scalar(
-                    select(ProductVariant.id).where(
-                        ProductVariant.product_id == variant.product_id,
-                        ProductVariant.sku == data["sku"],
-                        ProductVariant.id != variant_id,
-                    )
-                )
-                if exists is not None:
-                    raise MasterError(409, "sku_conflict", "SKU already exists on this product")
             for key, value in data.items():
                 setattr(variant, key, value)
             await session.flush()

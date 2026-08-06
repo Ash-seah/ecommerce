@@ -121,13 +121,18 @@ class AdminService:
         state = await self._sandbox.mutate(session_id, mutation)
         return state, merge_catalog(master, state)
 
-    def _allocate_slug(self, catalog: CatalogSnapshot) -> str:
+    def _allocate_short_id(self, catalog: CatalogSnapshot) -> str:
         taken = {item.slug.casefold() for item in (*catalog.categories, *catalog.products)}
+        taken.update(
+            variant.sku.casefold()
+            for product in catalog.products
+            for variant in product.variants
+        )
         for _ in range(8):
             candidate = short_uuid()
             if candidate not in taken:
                 return candidate
-        raise AdminError(500, "slug_allocate_failed", "Could not allocate a unique short id")
+        raise AdminError(500, "short_id_allocate_failed", "Could not allocate a unique short id")
 
     async def create_category(
         self, session_id: str, body: CategoryInput
@@ -137,7 +142,7 @@ class AdminService:
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
             category = CategorySnapshot(
                 id=category_id,
-                slug=self._allocate_slug(catalog),
+                slug=self._allocate_short_id(catalog),
                 **body.model_dump(),
             )
             custom = dict(state.custom_categories)
@@ -213,7 +218,7 @@ class AdminService:
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
             product = ProductSnapshot(
                 id=product_id,
-                slug=self._allocate_slug(catalog),
+                slug=self._allocate_short_id(catalog),
                 variants=(),
                 media=(),
                 **body.model_dump(),
@@ -313,31 +318,37 @@ class AdminService:
     async def create_variant(
         self, session_id: str, product_id: UUID, body: VariantInput
     ) -> tuple[SandboxState, VariantSnapshot]:
-        variant = VariantSnapshot(id=uuid4(), **body.model_dump())
+        variant_id = uuid4()
 
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
             self._product(catalog, product_id)
+            variant = VariantSnapshot(
+                id=variant_id,
+                sku=self._allocate_short_id(catalog),
+                **body.model_dump(),
+            )
             custom = dict(state.custom_variants)
-            custom[variant.id] = CustomVariant(product_id=product_id, variant=variant)
+            custom[variant_id] = CustomVariant(product_id=product_id, variant=variant)
             return state.model_copy(update={"custom_variants": custom})
 
         state, catalog = await self._mutate_catalog(session_id, change)
-        return state, self._variant(catalog, variant.id)[1]
+        return state, self._variant(catalog, variant_id)[1]
 
     async def update_variant(
         self, session_id: str, variant_id: UUID, body: VariantInput
     ) -> tuple[SandboxState, VariantSnapshot]:
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
-            self._variant(catalog, variant_id)
+            _product, current = self._variant(catalog, variant_id)
+            data = body.model_dump()
             if variant_id in state.custom_variants:
                 custom = dict(state.custom_variants)
                 record = custom[variant_id]
                 custom[variant_id] = record.model_copy(
-                    update={"variant": VariantSnapshot(id=variant_id, **body.model_dump())}
+                    update={"variant": current.model_copy(update=data)}
                 )
                 return state.model_copy(update={"custom_variants": custom})
             overlays = dict(state.variant_overlays)
-            overlays[variant_id] = VariantOverlay(**body.model_dump())
+            overlays[variant_id] = VariantOverlay(**data)
             return state.model_copy(update={"variant_overlays": overlays})
 
         state, catalog = await self._mutate_catalog(session_id, change)

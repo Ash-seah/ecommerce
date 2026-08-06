@@ -44,7 +44,6 @@ def test_request_models_coerce_uuid_strings() -> None:
     master_variant = VariantCreate.model_validate(
         {
             "product_id": product_id,
-            "sku": "BOOT-M",
             "name": "Boot / M",
             "price_minor": 1000,
             "currency": "IRR",

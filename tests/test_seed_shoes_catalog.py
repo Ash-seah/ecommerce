@@ -9,11 +9,10 @@ def test_shoes_catalog_tree_shape() -> None:
         "products": 18,
         "variants": 54,
     }
-    skus = [
-        f"{product.sku_prefix}-{size}"
+    names = [
+        product.name
         for mother in CATALOG
         for child in mother.children
         for product in child.products
-        for size in ("S", "M", "L")
     ]
-    assert len(skus) == len(set(skus))
+    assert len(names) == len(set(names))

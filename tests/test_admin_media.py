@@ -104,7 +104,6 @@ async def test_restore_variant_resets_overlay_inventory_and_tombstone() -> None:
         session_id,
         product.id,
         VariantInput(
-            sku="SECOND",
             name="Second variant",
             price_minor=100,
             currency=variant.currency,
@@ -115,7 +114,6 @@ async def test_restore_variant_resets_overlay_inventory_and_tombstone() -> None:
         session_id,
         variant.id,
         VariantInput(
-            sku=variant.sku,
             name="Changed variant",
             price_minor=250,
             currency=variant.currency,
@@ -134,7 +132,7 @@ async def test_restore_variant_resets_overlay_inventory_and_tombstone() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_validates_references_and_duplicate_skus() -> None:
+async def test_admin_validates_references_and_allocates_variant_codes() -> None:
     sandbox, _redis, _secrets, master = await service_fixture()
     admin = AdminService(sandbox, default_stock=5)
     session_id, _nonce, _state = await sandbox.create()
@@ -159,17 +157,16 @@ async def test_admin_validates_references_and_duplicate_skus() -> None:
     )
     assert len(product.slug) == 12
     assert product_state.version > 0
-    with pytest.raises(AdminError, match="SKU"):
-        await admin.create_variant(
-            session_id,
-            product.id,
-            VariantInput(
-                sku=master.products[0].variants[0].sku,
-                name="Duplicate",
-                price_minor=10,
-                currency="USD",
-            ),
-        )
+    _state, created = await admin.create_variant(
+        session_id,
+        product.id,
+        VariantInput(
+            name="Custom / M",
+            price_minor=10,
+            currency="USD",
+        ),
+    )
+    assert len(created.sku) == 12
     with pytest.raises(AdminError, match="products"):
         await admin.delete_category(session_id, master.categories[0].id)
 

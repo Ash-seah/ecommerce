@@ -89,7 +89,7 @@ async def seed() -> None:
                 .values(
                     id=variant_id,
                     product_id=product_id,
-                    sku=f"TEE-CLASSIC-{size}",
+                    sku=variant_id.hex[:12],
                     name=f"Classic Tee / {size}",
                     price_minor=price,
                     currency="IRR",

@@ -52,7 +52,6 @@ class VariantInput(AdminModel):
         json_schema_extra={
             "examples": [
                 {
-                    "sku": "SANDBOX-SHIRT-M",
                     "name": "Sandbox Shirt / M",
                     "price_minor": 2499,
                     "currency": "USD",
@@ -61,7 +60,6 @@ class VariantInput(AdminModel):
         },
     )
 
-    sku: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
     name: str = Field(min_length=1, max_length=160)
     price_minor: Annotated[int, Field(ge=0, le=1_000_000_000)]
     currency: str = Field(pattern=r"^[A-Z]{3}$")

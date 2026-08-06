@@ -7,5 +7,5 @@ _SHORT_UUID_LENGTH = 12
 
 
 def short_uuid() -> str:
-    """Return a lowercase hex short id for use as a category/product slug."""
+    """Return a lowercase hex short id for category/product slugs and variant codes."""
     return uuid4().hex[:_SHORT_UUID_LENGTH]

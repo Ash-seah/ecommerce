@@ -11,7 +11,7 @@ MASTER_API_BASE_URL (include /api when calling Nginx).
   MASTER_API_BASE_URL=https://ecommerce.terabitventure.com/api \\
     python3 -m scripts.seed_shoes_via_master_api
 
-Not idempotent: re-running creates duplicate categories/products (variant SKUs 409).
+Not idempotent: re-running creates duplicate categories/products.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ _SIZES: tuple[tuple[str, int], ...] = (
 class ProductSpec:
     name: str
     description: str
-    sku_prefix: str
     base_price_minor: int
 
 
@@ -68,19 +67,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "AeroStride Runner",
                         "Breathable mesh trainer for daily road runs",
-                        "AERO-M",
                         2_450_000,
                     ),
                     ProductSpec(
                         "TrailPeak Pro",
                         "Trail grip sole for mixed terrain",
-                        "TRAIL-M",
                         3_200_000,
                     ),
                     ProductSpec(
                         "PaceLite Elite",
                         "Race-day lightweight racing shoe",
-                        "PACE-M",
                         4_100_000,
                     ),
                 ),
@@ -93,19 +89,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "CityWalk Classic",
                         "Daily canvas sneaker",
-                        "CITY-M",
                         1_800_000,
                     ),
                     ProductSpec(
                         "UrbanSoft Loafer",
                         "Comfort slip-on casual",
-                        "URBN-M",
                         2_100_000,
                     ),
                     ProductSpec(
                         "MetroSlip Knit",
                         "Knit slip-on for city wear",
-                        "METRO-M",
                         2_400_000,
                     ),
                 ),
@@ -118,19 +111,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "RidgeGuard Hiker",
                         "Waterproof hiking boot",
-                        "RIDGE-M",
                         5_500_000,
                     ),
                     ProductSpec(
                         "Forge Leather Boot",
                         "Formal leather boot",
-                        "FORGE-M",
                         6_200_000,
                     ),
                     ProductSpec(
                         "NorthTrail Chelsea",
                         "Classic chelsea boot",
-                        "NORTH-M",
                         4_800_000,
                     ),
                 ),
@@ -150,19 +140,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "SwiftStep Runner",
                         "Cushioned road running shoe",
-                        "SWIFT-W",
                         2_400_000,
                     ),
                     ProductSpec(
                         "CloudPath Air",
                         "Soft daily trainer",
-                        "CLOUD-W",
                         2_900_000,
                     ),
                     ProductSpec(
                         "PulseRun Flex",
                         "Flexible knit upper runner",
-                        "PULSE-W",
                         3_500_000,
                     ),
                 ),
@@ -175,19 +162,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "BloomWalk Sneaker",
                         "Lifestyle sneaker",
-                        "BLOOM-W",
                         1_900_000,
                     ),
                     ProductSpec(
                         "SoftDay Flat",
                         "Leather everyday flat",
-                        "SOFT-W",
                         2_200_000,
                     ),
                     ProductSpec(
                         "NovaKnit Slip",
                         "Knit slip-on casual",
-                        "NOVA-W",
                         2_600_000,
                     ),
                 ),
@@ -200,19 +184,16 @@ CATALOG: tuple[MotherSpec, ...] = (
                     ProductSpec(
                         "VelvetRise Pump",
                         "Classic dress pump",
-                        "VELVET-W",
                         3_100_000,
                     ),
                     ProductSpec(
                         "AuraStiletto",
                         "Evening stiletto heel",
-                        "AURA-W",
                         3_800_000,
                     ),
                     ProductSpec(
                         "LunaBlock Heel",
                         "Stable block heel",
-                        "LUNA-W",
                         3_400_000,
                     ),
                 ),
@@ -274,7 +255,6 @@ def seed(base_url: str | None = None) -> dict[str, int]:
                 for size, uplift in _SIZES:
                     variant = client.create_variant(
                         product_id=product_id,
-                        sku=f"{product_spec.sku_prefix}-{size}",
                         name=f"{product_spec.name} / {size}",
                         price_minor=product_spec.base_price_minor + uplift,
                     )

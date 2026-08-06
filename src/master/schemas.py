@@ -60,7 +60,6 @@ class ProductUpdate(MasterModel):
 
 class VariantCreate(MasterModel):
     product_id: UUID
-    sku: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
     name: str = Field(min_length=1, max_length=160)
     price_minor: Annotated[int, Field(ge=0, le=1_000_000_000)]
     currency: str = Field(default="IRR", pattern=r"^[A-Z]{3}$")
@@ -68,7 +67,6 @@ class VariantCreate(MasterModel):
 
 
 class VariantUpdate(MasterModel):
-    sku: str | None = Field(default=None, min_length=1, max_length=80)
     name: str | None = Field(default=None, min_length=1, max_length=160)
     price_minor: Annotated[int | None, Field(default=None, ge=0, le=1_000_000_000)]
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")

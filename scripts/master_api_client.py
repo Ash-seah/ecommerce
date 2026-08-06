@@ -105,7 +105,6 @@ class MasterApiClient:
         self,
         *,
         product_id: UUID,
-        sku: str,
         name: str,
         price_minor: int,
         currency: str = "IRR",
@@ -115,7 +114,6 @@ class MasterApiClient:
             "/v1/master/variants",
             {
                 "product_id": str(product_id),
-                "sku": sku,
                 "name": name,
                 "price_minor": price_minor,
                 "currency": currency,
