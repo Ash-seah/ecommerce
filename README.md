@@ -125,6 +125,9 @@ stable UUIDs and upserts, so rerunning it is safe. Equivalent host commands are:
 alembic upgrade head
 python -m scripts.seed_master_catalog
 python -m scripts.refresh_catalog_cache
+# Optional: shoes demo via JWT master HTTP API (API must be running).
+# MASTER_API_BASE_URL=http://127.0.0.1:8001   # or https://host/api behind Nginx
+python -m scripts.seed_shoes_via_master_api
 ```
 
 Run tests in the dedicated image with:
