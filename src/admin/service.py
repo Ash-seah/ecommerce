@@ -79,11 +79,6 @@ class AdminService:
         product_slugs = [item.slug.casefold() for item in catalog.products]
         if len(product_slugs) != len(set(product_slugs)):
             raise AdminError(409, "duplicate_product_slug", "Product slug already exists")
-        skus = [
-            variant.sku.casefold() for product in catalog.products for variant in product.variants
-        ]
-        if len(skus) != len(set(skus)):
-            raise AdminError(409, "duplicate_sku", "SKU already exists")
         for category in catalog.categories:
             if category.parent_id is not None and category.parent_id not in category_ids:
                 raise AdminError(422, "invalid_parent", "Parent category does not exist")
