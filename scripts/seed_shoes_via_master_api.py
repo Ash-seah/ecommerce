@@ -16,15 +16,11 @@ Not idempotent: re-running creates duplicate categories/products (variant SKUs 4
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 from uuid import UUID
+
+from scripts.master_api_client import MasterApiError, login_from_env
 
 # size label -> price uplift over the product base (IRR minor units)
 _SIZES: tuple[tuple[str, int], ...] = (
@@ -226,120 +222,6 @@ CATALOG: tuple[MotherSpec, ...] = (
 )
 
 
-class MasterApiError(RuntimeError):
-    def __init__(self, status: int, body: str) -> None:
-        super().__init__(f"master API {status}: {body}")
-        self.status = status
-        self.body = body
-
-
-class MasterApiClient:
-    def __init__(self, base_url: str, token: str | None = None) -> None:
-        self._base = base_url.rstrip("/")
-        self._token = token
-
-    def login(self, username: str, password: str) -> str:
-        payload = self._request(
-            "POST",
-            "/v1/master/auth/login",
-            {"username": username, "password": password},
-            auth=False,
-        )
-        token = payload["access_token"]
-        if not isinstance(token, str) or not token:
-            raise MasterApiError(500, "login response missing access_token")
-        self._token = token
-        return token
-
-    def create_category(
-        self,
-        *,
-        name: str,
-        description: str,
-        sort_order: int,
-        parent_id: UUID | None = None,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "name": name,
-            "description": description,
-            "sort_order": sort_order,
-            "is_active": True,
-        }
-        if parent_id is not None:
-            body["parent_id"] = str(parent_id)
-        return self._request("POST", "/v1/master/categories", body)["category"]
-
-    def create_product(self, *, category_id: UUID, name: str, description: str) -> dict[str, Any]:
-        return self._request(
-            "POST",
-            "/v1/master/products",
-            {
-                "category_id": str(category_id),
-                "name": name,
-                "description": description,
-                "is_active": True,
-            },
-        )["product"]
-
-    def create_variant(
-        self,
-        *,
-        product_id: UUID,
-        sku: str,
-        name: str,
-        price_minor: int,
-        currency: str = "IRR",
-    ) -> dict[str, Any]:
-        return self._request(
-            "POST",
-            "/v1/master/variants",
-            {
-                "product_id": str(product_id),
-                "sku": sku,
-                "name": name,
-                "price_minor": price_minor,
-                "currency": currency,
-                "is_active": True,
-            },
-        )["variant"]
-
-    def publish(self) -> dict[str, Any]:
-        return self._request("POST", "/v1/master/catalog/publish", {})
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        body: dict[str, Any] | None,
-        *,
-        auth: bool = True,
-    ) -> dict[str, Any]:
-        data = None if body is None else json.dumps(body).encode("utf-8")
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if auth:
-            if not self._token:
-                raise MasterApiError(401, "not logged in")
-            headers["Authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(
-            f"{self._base}{path}",
-            data=data,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise MasterApiError(exc.code, detail) from exc
-        if not raw:
-            return {}
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            raise MasterApiError(500, f"expected JSON object, got {type(payload).__name__}")
-        return payload
-
-
 def catalog_counts(catalog: tuple[MotherSpec, ...] = CATALOG) -> dict[str, int]:
     mothers = len(catalog)
     children = sum(len(mother.children) for mother in catalog)
@@ -353,41 +235,9 @@ def catalog_counts(catalog: tuple[MotherSpec, ...] = CATALOG) -> dict[str, int]:
     }
 
 
-def _load_dotenv(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        return {}
-    values: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("'").strip('"')
-        if key:
-            values[key] = value
-    return values
-
-
-def _env(name: str, dotenv: dict[str, str], default: str | None = None) -> str:
-    value = os.environ.get(name) or dotenv.get(name) or default
-    if value is None or value == "":
-        raise MasterApiError(500, f"missing required setting {name}")
-    return value
-
-
 def seed(base_url: str | None = None) -> dict[str, int]:
-    repo_root = Path(__file__).resolve().parents[1]
-    dotenv = {**_load_dotenv(repo_root / ".env"), **_load_dotenv(Path.cwd() / ".env")}
-    username = _env("ADMIN_USERNAME", dotenv, "admin")
-    password = _env("ADMIN_PASSWORD", dotenv, "admin123")
-    api_port = _env("API_PORT", dotenv, "8001")
-    resolved_base = (
-        base_url or os.environ.get("MASTER_API_BASE_URL") or f"http://127.0.0.1:{api_port}"
-    )
-    client = MasterApiClient(resolved_base)
-    client.login(username, password)
-    print(f"logged in as {username} @ {resolved_base}")
+    client, resolved_base = login_from_env(base_url)
+    print(f"logged in @ {resolved_base}")
 
     counts = {"categories": 0, "products": 0, "variants": 0}
     for mother in CATALOG:

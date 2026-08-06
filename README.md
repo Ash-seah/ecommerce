@@ -125,10 +125,10 @@ stable UUIDs and upserts, so rerunning it is safe. Equivalent host commands are:
 alembic upgrade head
 python -m scripts.seed_master_catalog
 python -m scripts.refresh_catalog_cache
-# Optional: shoes demo via JWT master HTTP API (API must be running).
-# Stdlib-only — no project venv required on the host.
+# Optional host scripts (stdlib HTTP; no project venv required). API must be running.
 # MASTER_API_BASE_URL=http://127.0.0.1:8001   # or https://host/api behind Nginx
 python3 -m scripts.seed_shoes_via_master_api
+python3 -m scripts.refresh_catalog_cache
 ```
 
 Run tests in the dedicated image with:
@@ -285,7 +285,8 @@ session, request ID, path parameter, query, or client-IP labels.
   alias, DB `1`, and network attachment.
 - Readiness says `minio` unavailable: run `docker compose up -d minio minio-init` and
   inspect `docker compose logs minio minio-init`.
-- Catalog unavailable: run the cache-refresh job after migration and seed.
+- Catalog unavailable: run `python3 -m scripts.refresh_catalog_cache` (host HTTP
+  fallback) or the Compose `cache-refresh` job after migration and seed.
 - Browser mutation gets 403: send an exact configured `Origin`, retain the HttpOnly
   cookie, and use the latest CSRF token (rotation/reset invalidates the old token).
 - Browser CORS fails: only explicit methods and `Authorization`, `Content-Type`,
