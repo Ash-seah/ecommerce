@@ -3,10 +3,13 @@
 Creates 2 parent categories, 3 children each, 3 products each, 3 variants each
 (2 + 6 + 18 + 54 = 80 writes), then publishes the Redis catalog snapshot.
 
-Credentials come from .env (ADMIN_USERNAME / ADMIN_PASSWORD). Base URL defaults to
-the local API; override with MASTER_API_BASE_URL (include /api when calling Nginx).
+Stdlib only (no venv required on the host). Reads ADMIN_* from the process env or
+a local .env file. Base URL defaults to http://127.0.0.1:8001; override with
+MASTER_API_BASE_URL (include /api when calling Nginx).
 
-  python -m scripts.seed_shoes_via_master_api
+  python3 -m scripts.seed_shoes_via_master_api
+  MASTER_API_BASE_URL=https://ecommerce.terabitventure.com/api \\
+    python3 -m scripts.seed_shoes_via_master_api
 
 Not idempotent: re-running creates duplicate categories/products (variant SKUs 409).
 """
@@ -19,10 +22,9 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
-
-from src.core.config import get_settings
 
 # size label -> price uplift over the product base (IRR minor units)
 _SIZES: tuple[tuple[str, int], ...] = (
@@ -351,14 +353,41 @@ def catalog_counts(catalog: tuple[MotherSpec, ...] = CATALOG) -> dict[str, int]:
     }
 
 
+def _load_dotenv(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key:
+            values[key] = value
+    return values
+
+
+def _env(name: str, dotenv: dict[str, str], default: str | None = None) -> str:
+    value = os.environ.get(name) or dotenv.get(name) or default
+    if value is None or value == "":
+        raise MasterApiError(500, f"missing required setting {name}")
+    return value
+
+
 def seed(base_url: str | None = None) -> dict[str, int]:
-    settings = get_settings()
+    repo_root = Path(__file__).resolve().parents[1]
+    dotenv = {**_load_dotenv(repo_root / ".env"), **_load_dotenv(Path.cwd() / ".env")}
+    username = _env("ADMIN_USERNAME", dotenv, "admin")
+    password = _env("ADMIN_PASSWORD", dotenv, "admin123")
+    api_port = _env("API_PORT", dotenv, "8001")
     resolved_base = (
-        base_url or os.environ.get("MASTER_API_BASE_URL") or f"http://127.0.0.1:{settings.api_port}"
+        base_url or os.environ.get("MASTER_API_BASE_URL") or f"http://127.0.0.1:{api_port}"
     )
     client = MasterApiClient(resolved_base)
-    client.login(settings.admin_username, settings.admin_password)
-    print(f"logged in as {settings.admin_username} @ {resolved_base}")
+    client.login(username, password)
+    print(f"logged in as {username} @ {resolved_base}")
 
     counts = {"categories": 0, "products": 0, "variants": 0}
     for mother in CATALOG:
