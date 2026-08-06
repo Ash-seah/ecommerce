@@ -8,9 +8,9 @@ demo-only and can disappear.
 
 ## Architecture and copy-on-write behavior
 
-- PostgreSQL database `ecommerce_master` holds immutable, revisioned master catalog
-  data. Runtime code connects only as `ecommerce_reader`; migrations and the explicit
-  seed command use `ecommerce_owner`.
+- PostgreSQL database `ecommerce_master` holds the revisioned master catalog.
+  Runtime shopper reads use `ecommerce_reader`. Migrations, seed, and JWT master
+  write APIs use `ecommerce_owner`.
 - Redis database `1`, under the `ecommerce:` prefix, holds the published catalog
   snapshot, anonymous sandbox state, optimistic-locking versions, idempotency results,
   and rate-limit counters.
@@ -45,9 +45,14 @@ Interactive OpenAPI is at <http://localhost:8001/docs>; the schema is
   `/v1/orders/{id}/transition`.
 - Sandbox admin: copy-on-write categories, products, variants, prices, inventory,
   active flags, coupons, media, and restore operations under `/v1/admin`.
+- Master admin (JWT): login at `POST /v1/master/auth/login`, then Bearer-protected
+  create/update for categories, products, variants; multipart product media upload
+  into the master MinIO bucket; delete media; and
+  `POST /v1/master/catalog/publish` (also runs automatically after each write).
 
-All state-changing requests require the session cookie, an allowed `Origin`, and the
-origin-bound `X-CSRF-Token`. Checkout additionally requires `Idempotency-Key`.
+Sandbox/commerce mutations require the session cookie, an allowed `Origin` (or Host
+matching CORS), and the origin-bound `X-CSRF-Token`. Checkout additionally requires
+`Idempotency-Key`. Master routes use `Authorization: Bearer <jwt>` instead of CSRF.
 Errors use RFC 9457 `application/problem+json`; `instance` is the safe request ID URN.
 
 ## Configuration and secrets
@@ -72,6 +77,8 @@ Important settings are:
 - MinIO endpoint, independent credentials, bucket names, upload/concurrency limits,
   and optional media URL gateway.
 - independent session/CSRF secrets, two-hour TTL, and cookie flags.
+- plain `ADMIN_USERNAME` / `ADMIN_PASSWORD` (defaults `admin` / `admin123`) and a
+  distinct `JWT_SECRET` (≥32 chars) for master write APIs.
 - request/upload byte limits, rate count/window, readiness timeout, and commerce limits.
 - `TRUSTED_PROXY_IPS`: only direct reverse-proxy IPs/CIDRs trusted by Uvicorn.
 
@@ -158,6 +165,27 @@ curl --fail http://127.0.0.1:8001/health/ready
 creates/updates dedicated ecommerce roles and `ecommerce_master`; it does not modify
 the `financial` database. The reader receives `CONNECT`, schema `USAGE`, and table
 `SELECT`, while write privileges remain absent.
+
+## Master catalog JWT examples
+
+```bash
+TOKEN=$(curl -sS -X POST http://localhost:8001/v1/master/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}' | jq -r .access_token)
+
+curl -sS -X POST http://localhost:8001/v1/master/categories \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"slug":"shoes","name":"Shoes","sort_order":0}'
+
+# After creating a product, upload a PNG/JPEG/WebP into ecommerce-master:
+curl -sS -X POST "http://localhost:8001/v1/master/products/$PRODUCT_ID/media" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@./hero.png;type=image/png" \
+  -F 'alt_text=Hero' -F 'sort_order=0'
+```
+
+Behind Nginx with `ROOT_PATH=/api`, call `https://ecommerce.terabitventure.com/api/v1/master/...`.
+Writes refresh the Redis catalog snapshot; new sandboxes pick up the updated master.
 
 ## Cookie and CSRF examples
 
@@ -254,7 +282,9 @@ session, request ID, path parameter, query, or client-IP labels.
 - Catalog unavailable: run the cache-refresh job after migration and seed.
 - Browser mutation gets 403: send an exact configured `Origin`, retain the HttpOnly
   cookie, and use the latest CSRF token (rotation/reset invalidates the old token).
-- Browser CORS fails: only explicit methods and `Content-Type`, `Idempotency-Key`,
-  `X-CSRF-Token`, and `X-Request-ID` are allowed.
+- Browser CORS fails: only explicit methods and `Authorization`, `Content-Type`,
+  `Idempotency-Key`, `X-CSRF-Token`, and `X-Request-ID` are allowed.
+- Master login fails after deploy: set plain `ADMIN_USERNAME`/`ADMIN_PASSWORD` and a
+  unique `JWT_SECRET` in `.env`, then recreate the API container.
 - Media URL uses `minio:9000`: configure an endpoint resolvable from clients or a
   correctly secured media gateway as described above.

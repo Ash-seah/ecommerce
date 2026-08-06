@@ -27,9 +27,11 @@ from src.commerce.service import (
 from src.core.config import Settings, get_settings
 from src.core.errors import install_exception_handlers, problem
 from src.core.middleware import RequestMiddleware
-from src.infrastructure.database import ReaderDatabase
+from src.infrastructure.database import OwnerDatabase, ReaderDatabase
 from src.infrastructure.minio import MediaService, MinioProtocol
 from src.infrastructure.redis import RedisClient
+from src.master.router import router as master_router
+from src.master.service import MasterCatalogService
 from src.sandbox.router import router as sandbox_router
 from src.sandbox.security import SessionSecrets
 from src.sandbox.service import RedisProtocol, SandboxService
@@ -40,8 +42,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     resolved_settings = settings or get_settings()
     database = ReaderDatabase(resolved_settings)
+    owner_database = OwnerDatabase(resolved_settings)
     redis = RedisClient(resolved_settings)
-    catalog_repository = MasterCatalogRepository(database.session_factory)
+    catalog_repository = MasterCatalogRepository(
+        database.session_factory,
+        media_public_base_url=(
+            str(resolved_settings.media_public_base_url)
+            if resolved_settings.media_public_base_url
+            else None
+        ),
+        master_bucket=resolved_settings.minio_master_bucket,
+    )
     catalog_cache = CatalogSnapshotCache(
         redis, catalog_repository, key_prefix=resolved_settings.redis_key_prefix
     )
@@ -97,6 +108,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             default_stock=resolved_settings.demo_stock_default,
         ),
     )
+    master_service = MasterCatalogService(
+        owner_database.session_factory,
+        media_service,
+        catalog_cache,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -107,13 +123,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.started = False
             await redis.close()
             await database.close()
+            await owner_database.close()
 
     application = FastAPI(
         title=resolved_settings.app_name,
         version="0.1.0",
         description=(
-            "Anonymous, two-hour ecommerce demonstration API. Master catalog data is "
-            "read-only; every mutation is isolated in an expiring Redis sandbox."
+            "Anonymous, two-hour ecommerce demonstration API. Shopper mutations stay in "
+            "expiring Redis sandboxes. Master catalog and master MinIO writes use JWT "
+            "operator endpoints under /v1/master."
         ),
         openapi_tags=[
             {"name": "health", "description": "Process liveness and dependency readiness."},
@@ -121,11 +139,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"name": "sandbox", "description": "Anonymous sandbox lifecycle and merged catalog."},
             {"name": "commerce", "description": "Session-local shopping and checkout workflows."},
             {"name": "admin", "description": "Copy-on-write catalog administration."},
+            {
+                "name": "master",
+                "description": "JWT-protected master PostgreSQL and MinIO catalog editing.",
+            },
         ],
         root_path=resolved_settings.root_path,
         lifespan=lifespan,
     )
     application.state.reader_database = database
+    application.state.owner_database = owner_database
     application.state.redis = redis
     application.state.catalog_repository = catalog_repository
     application.state.catalog_cache = catalog_cache
@@ -135,13 +158,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.admin_service = admin_service
     application.state.media_service = media_service
     application.state.commerce_service = commerce_service
+    application.state.master_service = master_service
     application.state.started = False
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[str(origin).rstrip("/") for origin in resolved_settings.cors_origins],
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
+            "Authorization",
             "Content-Type",
             "Idempotency-Key",
             "X-CSRF-Token",
@@ -153,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(sandbox_router)
     application.include_router(commerce_router)
     application.include_router(admin_router)
+    application.include_router(master_router)
     install_exception_handlers(application)
 
     @application.get(

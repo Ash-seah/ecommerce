@@ -49,9 +49,18 @@ def install_exception_handlers(application: FastAPI) -> None:
     from src.admin.service import AdminError
     from src.commerce.service import CommerceError
     from src.infrastructure.minio import MediaError
+    from src.master.auth import MasterAuthError
+    from src.master.service import MasterError
     from src.sandbox.router import SandboxAPIError
 
-    error_types = (SandboxAPIError, CommerceError, AdminError, MediaError)
+    error_types = (
+        SandboxAPIError,
+        CommerceError,
+        AdminError,
+        MediaError,
+        MasterAuthError,
+        MasterError,
+    )
 
     @application.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

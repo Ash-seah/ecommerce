@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     free_shipping_threshold_minor: int = Field(default=5_000, ge=0, le=1_000_000_000)
     tax_basis_points: int = Field(default=0, ge=0, le=10_000)
 
+    # Master-catalog operator credentials (JWT). Password is stored plainly in .env.
+    admin_username: str = Field(default="admin", min_length=1, max_length=64)
+    admin_password: str = Field(default="admin123", min_length=1, max_length=128)
+    jwt_secret: SecretStr = Field(min_length=32)
+    jwt_ttl_seconds: int = Field(default=28800, ge=300, le=86400)
+
     @field_validator(
         "ecommerce_owner_password",
         "ecommerce_reader_password",
@@ -90,6 +96,7 @@ class Settings(BaseSettings):
         "minio_secret_key",
         "session_secret",
         "csrf_secret",
+        "jwt_secret",
         mode="before",
     )
     @classmethod
@@ -117,6 +124,7 @@ class Settings(BaseSettings):
         "shipping_flat_minor",
         "free_shipping_threshold_minor",
         "tax_basis_points",
+        "jwt_ttl_seconds",
         mode="before",
     )
     @classmethod
@@ -184,6 +192,11 @@ class Settings(BaseSettings):
             raise ValueError("master and sandbox media must use separate MinIO buckets")
         if self.session_secret.get_secret_value() == self.csrf_secret.get_secret_value():
             raise ValueError("session and CSRF secrets must be different")
+        if self.jwt_secret.get_secret_value() in {
+            self.session_secret.get_secret_value(),
+            self.csrf_secret.get_secret_value(),
+        }:
+            raise ValueError("JWT secret must differ from session and CSRF secrets")
         if self.environment == "production" and not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE must be true in production")
         if self.environment == "production" and "*" in self.trusted_proxy_ips:

@@ -1,12 +1,13 @@
 """Read-only access to the active master catalog."""
 
 from datetime import UTC
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from src.catalog.models import CatalogRevision, Product
+from src.catalog.models import CatalogRevision, MediaMetadata, Product
 from src.catalog.schemas import (
     CatalogSnapshot,
     CategorySnapshot,
@@ -23,8 +24,36 @@ class CatalogNotAvailableError(LookupError):
 class MasterCatalogRepository:
     """Build snapshots without exposing write operations."""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        media_public_base_url: str | None = None,
+        master_bucket: str | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._media_base_url = (
+            media_public_base_url.rstrip("/") if media_public_base_url else None
+        )
+        self._master_bucket = master_bucket
+
+    def _media_url(self, object_key: str) -> str | None:
+        if self._media_base_url is None or self._master_bucket is None:
+            return None
+        bucket = quote(self._master_bucket, safe="")
+        key = quote(object_key, safe="/")
+        return f"{self._media_base_url}/{bucket}/{key}"
+
+    def _media_snapshot(self, media: MediaMetadata) -> MediaSnapshot:
+        return MediaSnapshot(
+            id=media.id,
+            object_key=media.object_key,
+            content_type=media.content_type,
+            alt_text=media.alt_text,
+            byte_size=media.byte_size,
+            sort_order=media.sort_order,
+            url=self._media_url(media.object_key),
+        )
 
     async def get_active_snapshot(self) -> CatalogSnapshot:
         statement = (
@@ -63,7 +92,7 @@ class MasterCatalogRepository:
                     )
                 ),
                 media=tuple(
-                    MediaSnapshot.model_validate(media)
+                    self._media_snapshot(media)
                     for media in sorted(
                         (item for item in product.media if item.is_active),
                         key=lambda item: (item.sort_order, item.object_key, str(item.id)),

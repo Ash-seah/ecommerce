@@ -187,6 +187,7 @@ def test_openapi_has_tags_examples_and_operation_metadata() -> None:
         "sandbox",
         "commerce",
         "admin",
+        "master",
     }
     assert schema["components"]["schemas"]["CartQuantityRequest"]["examples"]
     for path in schema["paths"].values():

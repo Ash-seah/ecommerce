@@ -86,20 +86,21 @@ class MediaService:
         async with self._semaphore:
             return await asyncio.to_thread(operation, *args, **kwargs)
 
-    async def url(self, object_key: str) -> str:
+    async def url(self, object_key: str, *, master: bool = False) -> str:
         """Return a browser-reachable object URL.
 
         Prefer MEDIA_PUBLIC_BASE_URL (unsigned public/gateway URL). Presigned
         fallbacks use the MinIO client endpoint and are only useful when that
         hostname is reachable by the browser.
         """
+        bucket_name = self.master_bucket if master else self.sandbox_bucket
         if self._base_url is not None:
-            bucket = quote(self.sandbox_bucket, safe="")
+            bucket = quote(bucket_name, safe="")
             key = quote(object_key, safe="/")
             return f"{self._base_url}/{bucket}/{key}"
         return await self._offload(
             self._client.presigned_get_object,
-            self.sandbox_bucket,
+            bucket_name,
             object_key,
             expires=timedelta(hours=1),
         )
@@ -152,6 +153,57 @@ class MediaService:
             sort_order=sort_order,
             url=await self.url(object_key),
         )
+
+    async def upload_master(
+        self,
+        data: bytes,
+        declared_content_type: str | None,
+        alt_text: str,
+        sort_order: int,
+        *,
+        object_prefix: str = "catalog/",
+    ) -> MediaSnapshot:
+        if len(data) > self.max_upload_bytes:
+            raise MediaError(413, "file_too_large", "Upload exceeds the configured size limit")
+        if not data:
+            raise MediaError(422, "empty_file", "Upload cannot be empty")
+        detected = detect_image_type(data)
+        if detected is None:
+            raise MediaError(422, "unsupported_media", "File signature is not PNG, JPEG, or WebP")
+        declared = (declared_content_type or "").split(";", 1)[0].strip().lower()
+        if declared not in _IMAGE_TYPES:
+            raise MediaError(422, "unsupported_media_type", "Declared media type is not allowed")
+        if declared != detected:
+            raise MediaError(
+                422,
+                "media_type_mismatch",
+                "Declared type does not match file signature",
+            )
+        prefix = object_prefix if object_prefix.endswith("/") else f"{object_prefix}/"
+        media_id = uuid4()
+        object_key = f"{prefix}{uuid4().hex}.{_IMAGE_TYPES[detected]}"
+        await self._offload(
+            self._client.put_object,
+            self.master_bucket,
+            object_key,
+            BytesIO(data),
+            len(data),
+            content_type=detected,
+        )
+        return MediaSnapshot(
+            id=media_id,
+            object_key=object_key,
+            content_type=detected,
+            alt_text=alt_text,
+            byte_size=len(data),
+            sort_order=sort_order,
+            url=await self.url(object_key, master=True),
+        )
+
+    async def delete_master(self, object_key: str) -> None:
+        if not object_key.startswith("catalog/"):
+            raise MediaError(403, "media_not_master", "Only catalog/ master objects can be deleted")
+        await self._offload(self._client.remove_object, self.master_bucket, object_key)
 
     async def delete(self, safe_id: str, object_key: str) -> None:
         if not object_key.startswith(self.prefix(safe_id)):

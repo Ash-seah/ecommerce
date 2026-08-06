@@ -1,4 +1,4 @@
-"""Reader-only runtime database infrastructure."""
+"""Database infrastructure: reader for runtime reads, owner for master writes."""
 
 from collections.abc import AsyncIterator
 
@@ -32,6 +32,21 @@ class ReaderDatabase:
         async with self.engine.connect() as connection:
             result: int | None = await connection.scalar(text("SELECT 1"))
         return result == 1
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
+class OwnerDatabase:
+    """Owner-role engine used only by master-catalog admin mutations."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            str(settings.migration_database_url), pool_pre_ping=True
+        )
+        self.session_factory = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
 
     async def close(self) -> None:
         await self.engine.dispose()

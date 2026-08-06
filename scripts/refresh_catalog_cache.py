@@ -13,7 +13,13 @@ async def refresh() -> None:
     settings = get_settings()
     database = ReaderDatabase(settings)
     redis = RedisClient(settings)
-    repository = MasterCatalogRepository(database.session_factory)
+    repository = MasterCatalogRepository(
+        database.session_factory,
+        media_public_base_url=(
+            str(settings.media_public_base_url) if settings.media_public_base_url else None
+        ),
+        master_bucket=settings.minio_master_bucket,
+    )
     cache = CatalogSnapshotCache(redis, repository, key_prefix=settings.redis_key_prefix)
     try:
         snapshot = await cache.refresh()
