@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.catalog.schemas import CategorySnapshot, MediaSnapshot
+from src.catalog.schemas import MediaSnapshot
 from src.sandbox.models import AddressRecord, OrderRecord, WalletLedgerEntry
 
 Minor = Annotated[int, Field(ge=0)]
@@ -40,8 +40,20 @@ class ProductView(CommerceModel):
     currency: Currency
 
 
+class CategoryNode(CommerceModel):
+    """Category with nested children for storefront navigation trees."""
+
+    id: UUID
+    parent_id: UUID | None
+    slug: str
+    name: str
+    description: str | None
+    sort_order: int
+    children: tuple["CategoryNode", ...] = ()
+
+
 class CategoryPage(CommerceModel):
-    items: tuple[CategorySnapshot, ...]
+    items: tuple[CategoryNode, ...]
     page: int
     page_size: int
     total: Minor

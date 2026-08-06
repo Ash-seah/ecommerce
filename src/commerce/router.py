@@ -6,12 +6,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, Query, Request
 
-from src.catalog.schemas import CategorySnapshot
 from src.commerce.schemas import (
     AddressInput,
     AddressList,
     CartQuantityRequest,
     CartView,
+    CategoryNode,
     CategoryPage,
     CheckoutRequest,
     LedgerPage,
@@ -71,8 +71,8 @@ async def list_categories(
     )
 
 
-@router.get("/catalog/categories/{identifier}", response_model=CategorySnapshot)
-async def get_category(request: Request, identifier: str) -> CategorySnapshot:
+@router.get("/catalog/categories/{identifier}", response_model=CategoryNode)
+async def get_category(request: Request, identifier: str) -> CategoryNode:
     context = await _existing_context(request)
     return await _catalog_call(_service(request).category(context.session_id, identifier))
 

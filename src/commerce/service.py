@@ -8,13 +8,14 @@ from uuid import UUID, uuid4
 
 from src.catalog.schemas import (
     CatalogSnapshot,
-    CategorySnapshot,
     ProductSnapshot,
     VariantSnapshot,
 )
+from src.commerce.category_tree import build_category_forest, category_subtree
 from src.commerce.schemas import (
     CartLineView,
     CartView,
+    CategoryNode,
     CategoryPage,
     LedgerPage,
     PricingBreakdown,
@@ -212,16 +213,17 @@ class CommerceService:
 
     async def categories(self, session_id: str, page: int, page_size: int) -> CategoryPage:
         _state, catalog = await self._state_catalog(session_id)
-        ordered = sorted(catalog.categories, key=lambda item: (item.sort_order, item.name.lower()))
-        items, total, pages = _page(ordered, page, page_size)
+        # Page root categories; each item includes its full nested child tree.
+        roots = build_category_forest(catalog.categories)
+        items, total, pages = _page(roots, page, page_size)
         return CategoryPage(items=items, page=page, page_size=page_size, total=total, pages=pages)
 
-    async def category(self, session_id: str, identifier: str) -> CategorySnapshot:
+    async def category(self, session_id: str, identifier: str) -> CategoryNode:
         _state, catalog = await self._state_catalog(session_id)
-        for category in catalog.categories:
-            if str(category.id) == identifier or category.slug == identifier:
-                return category
-        raise CommerceError(404, "category_not_found", "Category was not found")
+        node = category_subtree(catalog.categories, identifier)
+        if node is None:
+            raise CommerceError(404, "category_not_found", "Category was not found")
+        return node
 
     async def products(
         self,
@@ -245,9 +247,7 @@ class CommerceService:
         if category is not None and not category_ids:
             raise CommerceError(404, "category_not_found", "Category was not found")
         views = [
-            self._product_view(product, state)
-            for product in catalog.products
-            if product.variants
+            self._product_view(product, state) for product in catalog.products if product.variants
         ]
         if search:
             needle = search.casefold()
@@ -346,11 +346,7 @@ class CommerceService:
             _product, variant = item
             lines = list(state.cart.lines)
             index = next(
-                (
-                    position
-                    for position, line in enumerate(lines)
-                    if line.variant_id == variant.id
-                ),
+                (position for position, line in enumerate(lines) if line.variant_id == variant.id),
                 None,
             )
             existing = 0 if index is None else lines[index].quantity
@@ -394,9 +390,7 @@ class CommerceService:
 
     async def wishlist(self, session_id: str) -> tuple[ProductView, ...]:
         state, catalog = await self._state_catalog(session_id)
-        products = {
-            product.id: product for product in catalog.products if product.variants
-        }
+        products = {product.id: product for product in catalog.products if product.variants}
         return tuple(
             self._product_view(products[item_id], state)
             for item_id in sorted(state.wishlist.product_ids, key=str)
