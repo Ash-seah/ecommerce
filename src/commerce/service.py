@@ -244,7 +244,11 @@ class CommerceService:
         }
         if category is not None and not category_ids:
             raise CommerceError(404, "category_not_found", "Category was not found")
-        views = [self._product_view(product, state) for product in catalog.products]
+        views = [
+            self._product_view(product, state)
+            for product in catalog.products
+            if product.variants
+        ]
         if search:
             needle = search.casefold()
             views = [
@@ -275,6 +279,8 @@ class CommerceService:
         state, catalog = await self._state_catalog(session_id)
         for product in catalog.products:
             if str(product.id) == identifier or product.slug == identifier:
+                if not product.variants:
+                    break
                 return self._product_view(product, state)
         raise CommerceError(404, "product_not_found", "Product was not found")
 
@@ -388,7 +394,9 @@ class CommerceService:
 
     async def wishlist(self, session_id: str) -> tuple[ProductView, ...]:
         state, catalog = await self._state_catalog(session_id)
-        products = {product.id: product for product in catalog.products}
+        products = {
+            product.id: product for product in catalog.products if product.variants
+        }
         return tuple(
             self._product_view(products[item_id], state)
             for item_id in sorted(state.wishlist.product_ids, key=str)

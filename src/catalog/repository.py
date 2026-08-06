@@ -100,7 +100,11 @@ class MasterCatalogRepository:
                 ),
             )
             for product in sorted(
-                (item for item in revision.products if item.is_active),
+                (
+                    item
+                    for item in revision.products
+                    if item.is_active and any(variant.is_active for variant in item.variants)
+                ),
                 key=lambda item: (item.slug, str(item.id)),
             )
         )
