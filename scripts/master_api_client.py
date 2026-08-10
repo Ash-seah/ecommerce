@@ -89,6 +89,12 @@ class MasterApiClient:
             body["parent_id"] = str(parent_id)
         return self._request("POST", "/v1/master/categories", body)["category"]
 
+    def update_category(self, category_id: UUID, **fields: Any) -> dict[str, Any]:
+        return self._request("PATCH", f"/v1/master/categories/{category_id}", fields)["category"]
+
+    def delete_category(self, category_id: UUID) -> None:
+        self._request("DELETE", f"/v1/master/categories/{category_id}", None)
+
     def create_product(self, *, category_id: UUID, name: str, description: str) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -100,6 +106,16 @@ class MasterApiClient:
                 "is_active": True,
             },
         )["product"]
+
+    def update_product(self, product_id: UUID, **fields: Any) -> dict[str, Any]:
+        body = {
+            key: (str(value) if isinstance(value, UUID) else value)
+            for key, value in fields.items()
+        }
+        return self._request("PATCH", f"/v1/master/products/{product_id}", body)["product"]
+
+    def delete_product(self, product_id: UUID) -> None:
+        self._request("DELETE", f"/v1/master/products/{product_id}", None)
 
     def create_variant(
         self,
@@ -120,6 +136,12 @@ class MasterApiClient:
                 "is_active": True,
             },
         )["variant"]
+
+    def update_variant(self, variant_id: UUID, **fields: Any) -> dict[str, Any]:
+        return self._request("PATCH", f"/v1/master/variants/{variant_id}", fields)["variant"]
+
+    def delete_variant(self, variant_id: UUID) -> None:
+        self._request("DELETE", f"/v1/master/variants/{variant_id}", None)
 
     def publish(self) -> dict[str, Any]:
         return self._request("POST", "/v1/master/catalog/publish", {})

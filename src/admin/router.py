@@ -100,6 +100,7 @@ async def restore_category(
     return CategoryResponse(category=category, version=state.version)
 
 
+
 @router.post("/products", response_model=ProductResponse, status_code=201)
 async def create_product(
     body: ProductInput,
@@ -274,6 +275,30 @@ async def delete_coupon(
     context = await _context(request, x_csrf_token)
     await _service(request).delete_coupon(context.session_id, code)
     return CouponList(items=await _service(request).coupons(context.session_id))
+
+
+@router.post("/categories/{category_id}/media", response_model=MediaUploadResponse)
+async def upload_category_media(
+    category_id: UUID,
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    alt_text: Annotated[str, Form(min_length=1, max_length=300)],
+    sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
+    x_csrf_token: str | None = Header(default=None),
+) -> MediaUploadResponse:
+    context = await _context(request, x_csrf_token)
+    media_service = _media(request)
+    data = await file.read(media_service.max_upload_bytes + 1)
+    media = await media_service.upload(
+        context.safe_id, data, file.content_type, alt_text, sort_order, is_main=is_main
+    )
+    try:
+        await _service(request).add_category_media(context.session_id, category_id, media)
+    except Exception:
+        await media_service.delete(context.safe_id, media.object_key)
+        raise
+    return MediaUploadResponse(media=media)
 
 
 @router.post("/products/{product_id}/media", response_model=MediaUploadResponse)

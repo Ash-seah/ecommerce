@@ -5,19 +5,16 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Hashable, Literal
 from uuid import UUID
 
 from src.sales.schemas import (
     BestSellerRow,
     BestSellers,
-    CategorySales,
-    CategorySalesRow,
-    CouponSales,
-    CouponSalesRow,
-    GeoSales,
-    GeoSalesRow,
     SaleEvent,
+    SalesBreakdown,
+    SalesBreakdownRow,
+    SalesGroupBy,
     SalesSeries,
     SalesSummary,
     SeriesPoint,
@@ -184,105 +181,82 @@ def timeseries(
     return SalesSeries(bucket=bucket, points=tuple(points))
 
 
-def by_category(events: Iterable[SaleEvent]) -> CategorySales:
-    recorded = [item for item in events if item.status == "recorded"]
-    buckets: dict[UUID, dict[str, object]] = {}
-    for item in recorded:
-        bucket = buckets.setdefault(
-            item.category_id,
-            {
-                "category_id": item.category_id,
-                "category_slug": item.category_slug,
-                "category_name": item.category_name,
-                "units": 0,
-                "revenue": 0,
-                "orders": set(),
-            },
-        )
-        bucket["units"] = int(bucket["units"]) + item.quantity
-        bucket["revenue"] = int(bucket["revenue"]) + item.line_net_minor
-        orders = bucket["orders"]
-        assert isinstance(orders, set)
-        orders.add(item.order_id or item.id)
-    rows = [
-        CategorySalesRow(
-            category_id=data["category_id"],  # type: ignore[arg-type]
-            category_slug=None if data["category_slug"] is None else str(data["category_slug"]),
-            category_name=None if data["category_name"] is None else str(data["category_name"]),
-            units_sold=int(data["units"]),
-            revenue_minor=int(data["revenue"]),
-            orders=len(data["orders"]),  # type: ignore[arg-type]
-        )
-        for data in buckets.values()
-    ]
-    rows.sort(key=lambda row: row.revenue_minor, reverse=True)
-    return CategorySales(items=tuple(rows))
+def _group_key(item: SaleEvent, group_by: SalesGroupBy) -> Hashable:
+    if group_by == "category":
+        return item.category_id
+    if group_by == "coupon":
+        return item.coupon_code
+    return (item.country_code, item.region, item.city)
 
 
-def by_coupon(events: Iterable[SaleEvent]) -> CouponSales:
+def _blank_bucket(item: SaleEvent, group_by: SalesGroupBy) -> dict[str, object]:
+    base: dict[str, object] = {
+        "orders": set(),
+        "lines": 0,
+        "units": 0,
+        "discount": 0,
+        "net": 0,
+        "category_id": None,
+        "category_slug": None,
+        "category_name": None,
+        "coupon_code": None,
+        "country_code": None,
+        "region": None,
+        "city": None,
+    }
+    if group_by == "category":
+        base["category_id"] = item.category_id
+        base["category_slug"] = item.category_slug
+        base["category_name"] = item.category_name
+    elif group_by == "coupon":
+        base["coupon_code"] = item.coupon_code
+    else:
+        base["country_code"] = item.country_code
+        base["region"] = item.region
+        base["city"] = item.city
+    return base
+
+
+def group_by(events: Iterable[SaleEvent], *, by: SalesGroupBy) -> SalesBreakdown:
     recorded = [item for item in events if item.status == "recorded"]
-    buckets: dict[str | None, dict[str, object]] = {}
+    buckets: dict[Hashable, dict[str, object]] = {}
     for item in recorded:
-        key = item.coupon_code
-        bucket = buckets.setdefault(
-            key, {"coupon_code": key, "orders": set(), "lines": 0, "discount": 0, "net": 0}
-        )
+        key = _group_key(item, by)
+        bucket = buckets.setdefault(key, _blank_bucket(item, by))
         orders = bucket["orders"]
         assert isinstance(orders, set)
         orders.add(item.order_id or item.id)
         bucket["lines"] = int(bucket["lines"]) + 1
+        bucket["units"] = int(bucket["units"]) + item.quantity
         bucket["discount"] = int(bucket["discount"]) + item.allocated_discount_minor
         bucket["net"] = int(bucket["net"]) + item.line_net_minor
     rows = [
-        CouponSalesRow(
+        SalesBreakdownRow(
+            category_id=data["category_id"],  # type: ignore[arg-type]
+            category_slug=(
+                None if data["category_slug"] is None else str(data["category_slug"])
+            ),
+            category_name=(
+                None if data["category_name"] is None else str(data["category_name"])
+            ),
             coupon_code=(
                 None if data["coupon_code"] is None else str(data["coupon_code"])
             ),
+            country_code=(
+                None if data["country_code"] is None else str(data["country_code"])
+            ),
+            region=None if data["region"] is None else str(data["region"]),
+            city=None if data["city"] is None else str(data["city"]),
             orders=len(data["orders"]),  # type: ignore[arg-type]
             lines=int(data["lines"]),
+            units_sold=int(data["units"]),
             discount_minor=int(data["discount"]),
             net_minor=int(data["net"]),
         )
         for data in buckets.values()
     ]
     rows.sort(key=lambda row: row.net_minor, reverse=True)
-    return CouponSales(items=tuple(rows))
-
-
-def by_geo(events: Iterable[SaleEvent]) -> GeoSales:
-    recorded = [item for item in events if item.status == "recorded"]
-    buckets: dict[tuple[str | None, str | None, str | None], dict[str, object]] = {}
-    for item in recorded:
-        key = (item.country_code, item.region, item.city)
-        bucket = buckets.setdefault(
-            key,
-            {
-                "country_code": item.country_code,
-                "region": item.region,
-                "city": item.city,
-                "orders": set(),
-                "units": 0,
-                "net": 0,
-            },
-        )
-        orders = bucket["orders"]
-        assert isinstance(orders, set)
-        orders.add(item.order_id or item.id)
-        bucket["units"] = int(bucket["units"]) + item.quantity
-        bucket["net"] = int(bucket["net"]) + item.line_net_minor
-    rows = [
-        GeoSalesRow(
-            country_code=None if data["country_code"] is None else str(data["country_code"]),
-            region=None if data["region"] is None else str(data["region"]),
-            city=None if data["city"] is None else str(data["city"]),
-            orders=len(data["orders"]),  # type: ignore[arg-type]
-            units_sold=int(data["units"]),
-            net_minor=int(data["net"]),
-        )
-        for data in buckets.values()
-    ]
-    rows.sort(key=lambda row: row.net_minor, reverse=True)
-    return GeoSales(items=tuple(rows))
+    return SalesBreakdown(group_by=by, items=tuple(rows))
 
 
 def feed(

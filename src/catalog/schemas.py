@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 NonEmptyText = Annotated[str, Field(min_length=1)]
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+HexColor = Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
 
 
 class SnapshotModel(BaseModel):
@@ -35,12 +36,18 @@ class VariantSnapshot(SnapshotModel):
     media: tuple[MediaSnapshot, ...] = ()
 
 
+ProductSpecific = Annotated[str, Field(min_length=1, max_length=80)]
+
+
 class ProductSnapshot(SnapshotModel):
     id: UUID
     category_id: UUID
+    brand: str | None = None
     slug: NonEmptyText
     name: NonEmptyText
     description: str | None
+    details: str | None = None
+    specifics: tuple[ProductSpecific, ...] = ()
     discount_percent: Annotated[int, Field(ge=0, le=100)] = 0
     is_active: bool = True
     variants: tuple[VariantSnapshot, ...]
@@ -53,8 +60,11 @@ class CategorySnapshot(SnapshotModel):
     slug: NonEmptyText
     name: NonEmptyText
     description: str | None
+    color: HexColor | None = None
+    accent_color: HexColor | None = None
     sort_order: int
     is_active: bool = True
+    media: tuple[MediaSnapshot, ...] = ()
 
 
 class CatalogSnapshot(SnapshotModel):

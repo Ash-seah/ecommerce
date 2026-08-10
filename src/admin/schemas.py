@@ -24,6 +24,8 @@ class CategoryInput(AdminModel):
     parent_id: UUID | None = None
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     sort_order: int = 0
 
 
@@ -34,16 +36,24 @@ class ProductInput(AdminModel):
             "examples": [
                 {
                     "category_id": "00000000-0000-4000-8000-000000000001",
+                    "brand": "Acme",
                     "name": "Sandbox Shirt",
                     "description": "Visible only in this anonymous sandbox.",
+                    "details": "Cut for everyday wear with reinforced seams.",
+                    "specifics": ["Cotton", "Machine washable"],
                 }
             ]
         },
     )
 
     category_id: UUID
+    brand: str | None = Field(default=None, min_length=1, max_length=120)
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
+    details: str | None = Field(default=None, max_length=20_000)
+    specifics: tuple[Annotated[str, Field(min_length=1, max_length=80)], ...] = Field(
+        default=(), max_length=50
+    )
     discount_percent: Annotated[int, Field(ge=0, le=100)] = 0
 
 
@@ -117,6 +127,7 @@ class AdminCatalogResponse(AdminModel):
 class CategoryResponse(AdminModel):
     category: CategorySnapshot
     version: int
+
 
 
 class ProductResponse(AdminModel):

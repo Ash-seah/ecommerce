@@ -119,7 +119,10 @@ class AdminService:
         return state, merge_catalog(master, state)
 
     def _allocate_short_id(self, catalog: CatalogSnapshot) -> str:
-        taken = {item.slug.casefold() for item in (*catalog.categories, *catalog.products)}
+        taken = {
+            item.slug.casefold()
+            for item in (*catalog.categories, *catalog.products)
+        }
         taken.update(
             variant.sku.casefold()
             for product in catalog.products
@@ -140,6 +143,7 @@ class AdminService:
             category = CategorySnapshot(
                 id=category_id,
                 slug=self._allocate_short_id(catalog),
+                media=(),
                 **body.model_dump(),
             )
             custom = dict(state.custom_categories)
@@ -160,7 +164,7 @@ class AdminService:
                 custom[category_id] = current.model_copy(update=data)
                 return state.model_copy(update={"custom_categories": custom})
             overlays = dict(state.category_overlays)
-            overlays[category_id] = CategoryOverlay(**data)
+            overlays[category_id] = CategoryOverlay(**data, media=current.media)
             return state.model_copy(update={"category_overlays": overlays})
 
         state, catalog = await self._mutate_catalog(session_id, change)
@@ -207,12 +211,14 @@ class AdminService:
         state, catalog = await self._mutate_catalog(session_id, change)
         return state, self._category(catalog, category_id)
 
+
     async def create_product(
         self, session_id: str, body: ProductInput
     ) -> tuple[SandboxState, ProductSnapshot]:
         product_id = uuid4()
 
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            self._category(catalog, body.category_id)
             product = ProductSnapshot(
                 id=product_id,
                 slug=self._allocate_short_id(catalog),
@@ -551,6 +557,26 @@ class AdminService:
         state, catalog = await self._mutate_catalog(session_id, change)
         return state, self._product(catalog, product_id)
 
+    async def add_category_media(
+        self, session_id: str, category_id: UUID, media: MediaSnapshot
+    ) -> tuple[SandboxState, CategorySnapshot]:
+        def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            category = self._category(catalog, category_id)
+            owned = dict(state.owned_media)
+            owned[media.id] = media
+            updated_media = with_media_appended(category.media, media)
+            if category_id in state.custom_categories:
+                custom = dict(state.custom_categories)
+                custom[category_id] = category.model_copy(update={"media": updated_media})
+                return state.model_copy(update={"custom_categories": custom, "owned_media": owned})
+            overlays = dict(state.category_overlays)
+            existing = overlays.get(category_id, CategoryOverlay())
+            overlays[category_id] = existing.model_copy(update={"media": updated_media})
+            return state.model_copy(update={"category_overlays": overlays, "owned_media": owned})
+
+        state, catalog = await self._mutate_catalog(session_id, change)
+        return state, self._category(catalog, category_id)
+
     async def add_variant_media(
         self, session_id: str, variant_id: UUID, media: MediaSnapshot
     ) -> tuple[SandboxState, VariantSnapshot]:
@@ -580,6 +606,26 @@ class AdminService:
         result: list[MediaSnapshot] = []
 
         def change(state: SandboxState, catalog: CatalogSnapshot) -> SandboxState:
+            for category in catalog.categories:
+                updated = with_main_media(category.media, media_id)
+                if updated is not None:
+                    main = next(item for item in updated if item.id == media_id)
+                    result.append(main)
+                    owned = dict(state.owned_media)
+                    if media_id in owned:
+                        owned[media_id] = main
+                    if category.id in state.custom_categories:
+                        custom = dict(state.custom_categories)
+                        custom[category.id] = category.model_copy(update={"media": updated})
+                        return state.model_copy(
+                            update={"custom_categories": custom, "owned_media": owned}
+                        )
+                    overlays = dict(state.category_overlays)
+                    existing = overlays.get(category.id, CategoryOverlay())
+                    overlays[category.id] = existing.model_copy(update={"media": updated})
+                    return state.model_copy(
+                        update={"category_overlays": overlays, "owned_media": owned}
+                    )
             for product in catalog.products:
                 updated = with_main_media(product.media, media_id)
                 if updated is not None:
@@ -644,6 +690,21 @@ class AdminService:
             del owned[media_id]
             removed.append(media)
 
+            for category in catalog.categories:
+                if any(item.id == media_id for item in category.media):
+                    updated_media = tuple(item for item in category.media if item.id != media_id)
+                    if category.id in state.custom_categories:
+                        custom = dict(state.custom_categories)
+                        custom[category.id] = category.model_copy(update={"media": updated_media})
+                        return state.model_copy(
+                            update={"custom_categories": custom, "owned_media": owned}
+                        )
+                    overlays = dict(state.category_overlays)
+                    existing = overlays.get(category.id, CategoryOverlay())
+                    overlays[category.id] = existing.model_copy(update={"media": updated_media})
+                    return state.model_copy(
+                        update={"category_overlays": overlays, "owned_media": owned}
+                    )
             for product in catalog.products:
                 if any(item.id == media_id for item in product.media):
                     updated_media = tuple(item for item in product.media if item.id != media_id)

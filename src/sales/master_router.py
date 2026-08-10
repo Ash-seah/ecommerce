@@ -9,13 +9,12 @@ from fastapi import APIRouter, Query, Request
 from src.master.router import AdminUser
 from src.sales.schemas import (
     BestSellers,
-    CategorySales,
-    CouponSales,
-    GeoSales,
     SaleCreate,
     SaleList,
     SaleResponse,
+    SalesBreakdown,
     SalesFeed,
+    SalesGroupBy,
     SalesSeries,
     SalesSummary,
     SaleUpdate,
@@ -154,42 +153,32 @@ async def sales_timeseries(
     )
 
 
-@router.get("/analytics/by-category", response_model=CategorySales)
-async def sales_by_category(
+@router.get("/analytics/breakdown", response_model=SalesBreakdown)
+async def sales_breakdown(
     request: Request,
     _admin: AdminUser,
+    group_by: SalesGroupBy = "category",
     status: Literal["recorded", "voided", "all"] = "recorded",
+    product_id: UUID | None = None,
+    category_id: UUID | None = None,
+    variant_id: UUID | None = None,
+    coupon_code: str | None = None,
+    country_code: str | None = None,
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
-) -> CategorySales:
-    return await _service(request).by_category(
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to)
-    )
-
-
-@router.get("/analytics/by-coupon", response_model=CouponSales)
-async def sales_by_coupon(
-    request: Request,
-    _admin: AdminUser,
-    status: Literal["recorded", "voided", "all"] = "recorded",
-    occurred_from: datetime | None = None,
-    occurred_to: datetime | None = None,
-) -> CouponSales:
-    return await _service(request).by_coupon(
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to)
-    )
-
-
-@router.get("/analytics/by-geo", response_model=GeoSales)
-async def sales_by_geo(
-    request: Request,
-    _admin: AdminUser,
-    status: Literal["recorded", "voided", "all"] = "recorded",
-    occurred_from: datetime | None = None,
-    occurred_to: datetime | None = None,
-) -> GeoSales:
-    return await _service(request).by_geo(
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to)
+) -> SalesBreakdown:
+    return await _service(request).breakdown(
+        group_by=group_by,
+        **_filters(
+            status,
+            product_id,
+            category_id,
+            variant_id,
+            coupon_code,
+            country_code,
+            occurred_from,
+            occurred_to,
+        ),
     )
 
 

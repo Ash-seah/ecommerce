@@ -18,8 +18,11 @@ def test_request_models_coerce_uuid_strings() -> None:
     wishlist = WishlistRequest.model_validate({"product_id": product_id})
     assert wishlist.product_id == UUID(product_id)
 
-    checkout = CheckoutRequest.model_validate({"address_id": address_id})
+    checkout = CheckoutRequest.model_validate(
+        {"address_id": address_id, "delivery_option_id": "standard"}
+    )
     assert checkout.address_id == UUID(address_id)
+    assert checkout.delivery_option_id == "standard"
 
     admin_product = ProductInput.model_validate(
         {"category_id": category_id, "name": "Shirt", "description": None}

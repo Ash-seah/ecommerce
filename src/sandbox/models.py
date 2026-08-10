@@ -12,6 +12,7 @@ from src.catalog.schemas import (
     ProductSnapshot,
     VariantSnapshot,
 )
+from src.reviews.schemas import ProductReview
 from src.sales.schemas import SaleEvent
 from src.views.schemas import ViewEvent
 
@@ -27,8 +28,11 @@ class CategoryOverlay(SandboxModel):
     slug: str | None = None
     name: str | None = None
     description: str | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     sort_order: int | None = None
     is_active: bool | None = None
+    media: tuple[MediaSnapshot, ...] | None = None
 
 
 class VariantOverlay(SandboxModel):
@@ -42,9 +46,12 @@ class VariantOverlay(SandboxModel):
 
 class ProductOverlay(SandboxModel):
     category_id: UUID | None = None
+    brand: str | None = None
     slug: str | None = None
     name: str | None = None
     description: str | None = None
+    details: str | None = None
+    specifics: tuple[Annotated[str, Field(min_length=1, max_length=80)], ...] | None = None
     discount_percent: Annotated[int, Field(ge=0, le=100)] | None = None
     is_active: bool | None = None
     media: tuple[MediaSnapshot, ...] | None = None
@@ -114,6 +121,8 @@ class OrderRecord(SandboxModel):
     tax_minor: NonNegativeInt
     total_minor: NonNegativeInt
     address: AddressRecord
+    delivery_option_id: str = Field(min_length=1, max_length=40)
+    delivery_option_label: str = Field(min_length=1, max_length=120)
     coupon_code: str | None = Field(default=None, min_length=1, max_length=40)
     created_at: datetime
     updated_at: datetime
@@ -186,6 +195,7 @@ class SandboxState(SandboxModel):
     inventory_ledger: list[InventoryLedgerEntry] = Field(default_factory=list)
     sales: dict[UUID, SaleEvent] = Field(default_factory=dict)
     views: dict[UUID, ViewEvent] = Field(default_factory=dict)
+    reviews: dict[UUID, ProductReview] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_document_invariants(self) -> Self:
@@ -207,4 +217,6 @@ class SandboxState(SandboxModel):
             raise ValueError("sales map keys must match entity IDs")
         if any(key != value.id for key, value in self.views.items()):
             raise ValueError("views map keys must match entity IDs")
+        if any(key != value.id for key, value in self.reviews.items()):
+            raise ValueError("reviews map keys must match entity IDs")
         return self

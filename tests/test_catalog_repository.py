@@ -35,22 +35,39 @@ def _revision() -> CatalogRevision:
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    revision.categories = [
-        Category(
-            id=category_id,
-            revision_id=revision_id,
-            slug="category",
-            name="Category",
+    category = Category(
+        id=category_id,
+        revision_id=revision_id,
+        slug="category",
+        name="Category",
+        color="#112233",
+        accent_color="#445566",
+        sort_order=0,
+        is_active=True,
+    )
+    category.media = [
+        MediaMetadata(
+            id=uuid4(),
+            category_id=category_id,
+            product_id=None,
+            object_key="category.webp",
+            content_type="image/webp",
+            alt_text="Category",
+            byte_size=12,
             sort_order=0,
+            is_main=True,
             is_active=True,
         )
     ]
+    revision.categories = [category]
     product = Product(
         id=product_id,
         revision_id=revision_id,
         category_id=category_id,
         slug="product",
         name="Product",
+        details="Long-form product details.",
+        specifics=["Durable", "Lightweight"],
         discount_percent=0,
         is_active=True,
     )
@@ -90,6 +107,11 @@ async def test_repository_builds_active_snapshot() -> None:
     snapshot = await repository.get_active_snapshot()
 
     assert snapshot.revision_number == 2
+    assert snapshot.categories[0].color == "#112233"
+    assert snapshot.categories[0].accent_color == "#445566"
+    assert snapshot.categories[0].media[0].object_key == "category.webp"
+    assert snapshot.products[0].details == "Long-form product details."
+    assert snapshot.products[0].specifics == ("Durable", "Lightweight")
     assert snapshot.products[0].variants[0].price_minor == 1250
     assert snapshot.products[0].discount_percent == 0
     assert snapshot.products[0].media[0].object_key == "product.webp"

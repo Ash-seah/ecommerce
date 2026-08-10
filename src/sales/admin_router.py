@@ -8,13 +8,12 @@ from fastapi import APIRouter, Header, Query, Request
 
 from src.sales.schemas import (
     BestSellers,
-    CategorySales,
-    CouponSales,
-    GeoSales,
     SaleCreate,
     SaleList,
     SaleResponse,
+    SalesBreakdown,
     SalesFeed,
+    SalesGroupBy,
     SalesSeries,
     SalesSummary,
     SaleUpdate,
@@ -167,45 +166,33 @@ async def sales_timeseries(
     )
 
 
-@router.get("/analytics/by-category", response_model=CategorySales)
-async def sales_by_category(
+@router.get("/analytics/breakdown", response_model=SalesBreakdown)
+async def sales_breakdown(
     request: Request,
+    group_by: SalesGroupBy = "category",
     status: Literal["recorded", "voided", "all"] = "recorded",
+    product_id: UUID | None = None,
+    category_id: UUID | None = None,
+    variant_id: UUID | None = None,
+    coupon_code: str | None = None,
+    country_code: str | None = None,
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
-) -> CategorySales:
+) -> SalesBreakdown:
     context = await _read(request)
-    return await _service(request).by_category(
+    return await _service(request).breakdown(
         context.session_id,
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to),
-    )
-
-
-@router.get("/analytics/by-coupon", response_model=CouponSales)
-async def sales_by_coupon(
-    request: Request,
-    status: Literal["recorded", "voided", "all"] = "recorded",
-    occurred_from: datetime | None = None,
-    occurred_to: datetime | None = None,
-) -> CouponSales:
-    context = await _read(request)
-    return await _service(request).by_coupon(
-        context.session_id,
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to),
-    )
-
-
-@router.get("/analytics/by-geo", response_model=GeoSales)
-async def sales_by_geo(
-    request: Request,
-    status: Literal["recorded", "voided", "all"] = "recorded",
-    occurred_from: datetime | None = None,
-    occurred_to: datetime | None = None,
-) -> GeoSales:
-    context = await _read(request)
-    return await _service(request).by_geo(
-        context.session_id,
-        **_filters(status, None, None, None, None, None, occurred_from, occurred_to),
+        group_by=group_by,
+        **_filters(
+            status,
+            product_id,
+            category_id,
+            variant_id,
+            coupon_code,
+            country_code,
+            occurred_from,
+            occurred_to,
+        ),
     )
 
 

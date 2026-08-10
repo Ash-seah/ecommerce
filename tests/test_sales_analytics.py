@@ -8,7 +8,7 @@ from test_commerce_services import address, commerce
 from test_sandbox_engine import service_fixture
 
 from src.sales.allocate import allocate_proportionally
-from src.sales.analytics import bestsellers, by_category, filter_sales, summarize, timeseries
+from src.sales.analytics import bestsellers, filter_sales, group_by, summarize, timeseries
 from src.sales.capture import sale_from_create
 from src.sales.schemas import SaleCreate
 from src.sales.service import SandboxSalesService, SalesAdminError
@@ -33,7 +33,7 @@ async def test_checkout_writes_sale_events_and_admin_analytics() -> None:
     await service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
     variant = master.products[0].variants[0]
     await service.change_cart(session_id, variant.id, 2, add=False)
-    order = await service.checkout(session_id, shipping.id, None, "sale-1")
+    order = await service.checkout(session_id, shipping.id, None, "sale-1", delivery_option_id="standard")
 
     listed = await sales.list_sales(session_id, page=1, page_size=20)
     assert listed.total == 1
@@ -57,8 +57,13 @@ async def test_checkout_writes_sale_events_and_admin_analytics() -> None:
     assert len(series.points) == 1
     assert series.points[0].units_sold == 2
 
-    categories = await sales.by_category(session_id)
+    categories = await sales.breakdown(session_id, group_by="category")
+    assert categories.group_by == "category"
     assert categories.items[0].category_id == master.products[0].category_id
+    assert categories.items[0].units_sold == 2
+
+    geo = await sales.breakdown(session_id, group_by="geo")
+    assert geo.items[0].country_code == "US"
 
     await service.transition_order(session_id, order.id, "cancel")
     voided = await sales.list_sales(session_id, page=1, page_size=20, status="voided")
@@ -162,7 +167,11 @@ def test_analytics_helpers_rank_and_filter() -> None:
     ranked = bestsellers(events, metric="units", limit=1)
     assert ranked.items[0].product_id == product_b
     assert summarize(events).units_sold == 5
-    assert by_category(events).items[0].units_sold == 5
+    by_category = group_by(events, by="category")
+    assert by_category.group_by == "category"
+    assert by_category.items[0].units_sold == 5
+    by_coupon = group_by(events, by="coupon")
+    assert {row.coupon_code for row in by_coupon.items} == {"SAVE10", None}
     assert len(timeseries(events, bucket="hour").points) >= 1
     only_coupon = filter_sales(events, coupon_code="save10")
     assert len(only_coupon) == 1

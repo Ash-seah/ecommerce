@@ -8,6 +8,7 @@ from test_commerce_services import address, commerce
 from test_sandbox_engine import service_fixture
 
 from src.admin.schemas import (
+    CategoryInput,
     CouponInput,
     InventoryAdjustment,
     ProductInput,
@@ -233,7 +234,7 @@ async def test_custom_coupon_changes_checkout_pricing() -> None:
         create=True,
     )
 
-    order = await commerce_service.checkout(session_id, shipping.id, "HALF", "coupon")
+    order = await commerce_service.checkout(session_id, shipping.id, "HALF", "coupon", delivery_option_id="standard")
     assert order.subtotal_minor == 200
     assert order.discount_minor == 75
     assert order.total_minor == 125
@@ -288,6 +289,58 @@ def media_service(fake: FakeMinio, *, maximum: int = 1024) -> MediaService:
         max_upload_bytes=maximum,
         media_base_url="https://cdn.test",
     )
+
+
+@pytest.mark.asyncio
+async def test_category_colors_and_media_surface_in_commerce_tree() -> None:
+    from src.catalog.schemas import MediaSnapshot
+
+    sandbox, _redis, _secrets, master = await service_fixture()
+    admin = AdminService(sandbox, default_stock=5)
+    commerce_service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    category = master.categories[0]
+
+    _state, updated = await admin.update_category(
+        session_id,
+        category.id,
+        CategoryInput(
+            parent_id=category.parent_id,
+            name=category.name,
+            description=category.description,
+            color="#112233",
+            accent_color="#A1B2C3",
+            sort_order=category.sort_order,
+        ),
+    )
+    assert updated.color == "#112233"
+    assert updated.accent_color == "#A1B2C3"
+
+    media = MediaSnapshot(
+        id=uuid4(),
+        object_key="sandboxes/demo/category.jpg",
+        content_type="image/jpeg",
+        alt_text="category banner",
+        byte_size=100,
+        sort_order=0,
+        is_main=True,
+        url="https://cdn.test/ecommerce-sandboxes/sandboxes/demo/category.jpg",
+    )
+    _state, with_media = await admin.add_category_media(session_id, category.id, media)
+    assert len(with_media.media) == 1
+    assert with_media.media[0].id == media.id
+
+    node = await commerce_service.category(session_id, str(category.id))
+    assert node.color == "#112233"
+    assert node.accent_color == "#A1B2C3"
+    assert node.media[0].id == media.id
+
+    _state, main = await admin.set_media_main(session_id, media.id)
+    assert main.is_main is True
+    _state, removed = await admin.remove_media(session_id, media.id)
+    assert removed.id == media.id
+    cleared = await commerce_service.category(session_id, str(category.id))
+    assert cleared.media == ()
 
 
 @pytest.mark.asyncio

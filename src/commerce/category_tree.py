@@ -77,7 +77,10 @@ def build_category_forest(categories: Sequence[CategorySnapshot]) -> tuple[Categ
             slug=category.slug,
             name=category.name,
             description=category.description,
+            color=category.color,
+            accent_color=category.accent_color,
             sort_order=category.sort_order,
+            media=category.media,
             children=tuple(nested),
         )
 
@@ -127,7 +130,10 @@ def category_subtree(
             slug=category.slug,
             name=category.name,
             description=category.description,
+            color=category.color,
+            accent_color=category.accent_color,
             sort_order=category.sort_order,
+            media=category.media,
             children=tuple(nested),
         )
 

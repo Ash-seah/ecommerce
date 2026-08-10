@@ -180,42 +180,29 @@ class SalesSeries(SalesModel):
     points: tuple[SeriesPoint, ...]
 
 
-class CategorySalesRow(SalesModel):
-    category_id: UUID
-    category_slug: str | None
-    category_name: str | None
-    units_sold: NonNegativeInt
-    revenue_minor: NonNegativeInt
-    orders: NonNegativeInt
+SalesGroupBy = Literal["category", "coupon", "geo"]
 
 
-class CategorySales(SalesModel):
-    items: tuple[CategorySalesRow, ...]
+class SalesBreakdownRow(SalesModel):
+    """One bucket from a group-by breakdown. Dimension fields depend on `group_by`."""
 
-
-class CouponSalesRow(SalesModel):
-    coupon_code: str | None
+    category_id: UUID | None = None
+    category_slug: str | None = None
+    category_name: str | None = None
+    coupon_code: str | None = None
+    country_code: str | None = None
+    region: str | None = None
+    city: str | None = None
     orders: NonNegativeInt
     lines: NonNegativeInt
+    units_sold: NonNegativeInt
     discount_minor: NonNegativeInt
     net_minor: NonNegativeInt
 
 
-class CouponSales(SalesModel):
-    items: tuple[CouponSalesRow, ...]
-
-
-class GeoSalesRow(SalesModel):
-    country_code: str | None
-    region: str | None
-    city: str | None
-    orders: NonNegativeInt
-    units_sold: NonNegativeInt
-    net_minor: NonNegativeInt
-
-
-class GeoSales(SalesModel):
-    items: tuple[GeoSalesRow, ...]
+class SalesBreakdown(SalesModel):
+    group_by: SalesGroupBy
+    items: tuple[SalesBreakdownRow, ...]
 
 
 class SalesFeed(SalesModel):

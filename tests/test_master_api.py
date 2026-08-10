@@ -22,9 +22,8 @@ from src.master.schemas import PublishResponse
 
 
 class StubMasterService:
-    async def create_category(self, body: object) -> CategorySnapshot:
-        del body
-        return CategorySnapshot(
+    def __init__(self) -> None:
+        self.category = CategorySnapshot(
             id=uuid4(),
             parent_id=None,
             slug="a1b2c3d4e5f6",
@@ -32,6 +31,39 @@ class StubMasterService:
             description=None,
             sort_order=0,
         )
+        self.deleted: list[str] = []
+        self.updated_name: str | None = None
+
+    async def get_catalog(self) -> object:
+        from datetime import UTC, datetime
+
+        from src.catalog.schemas import CatalogSnapshot
+
+        return CatalogSnapshot(
+            revision_id=uuid4(),
+            revision_number=1,
+            revision_label="Master catalog",
+            generated_at=datetime.now(UTC),
+            categories=(self.category,),
+            products=(),
+        )
+
+    async def create_category(self, body: object) -> CategorySnapshot:
+        del body
+        return self.category
+
+    async def get_category(self, category_id: object) -> CategorySnapshot:
+        del category_id
+        return self.category
+
+    async def update_category(self, category_id: object, body: object) -> CategorySnapshot:
+        del category_id
+        name = getattr(body, "name", None) or self.category.name
+        self.updated_name = name
+        return self.category.model_copy(update={"name": name})
+
+    async def delete_category(self, category_id: object) -> None:
+        self.deleted.append(f"category:{category_id}")
 
     async def publish(self) -> PublishResponse:
         return PublishResponse(
@@ -54,7 +86,9 @@ def _app_with_stub() -> object:
             return 1, 30
 
     app.state.redis = RateProbe()
-    app.state.master_service = StubMasterService()
+    stub = StubMasterService()
+    app.state.master_service = stub
+    app.state.stub_master = stub
     return app
 
 
@@ -122,9 +156,31 @@ async def test_login_and_bearer_protect_master_routes(client: httpx.AsyncClient)
         json={"name": "Demo"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert created.status_code == 200
+    assert created.status_code == 201
     assert created.json()["category"]["name"] == "Demo"
     assert len(created.json()["category"]["slug"]) == 12
+
+    category_id = created.json()["category"]["id"]
+    fetched = await client.get(
+        f"/v1/master/categories/{category_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["category"]["id"] == category_id
+
+    updated = await client.patch(
+        f"/v1/master/categories/{category_id}",
+        json={"name": "Renamed"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["category"]["name"] == "Renamed"
+
+    deleted = await client.delete(
+        f"/v1/master/categories/{category_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert deleted.status_code == 204
 
     published = await client.post(
         "/v1/master/catalog/publish",

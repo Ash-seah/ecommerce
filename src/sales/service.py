@@ -11,13 +11,12 @@ from src.sales.capture import apply_sale_update, sale_from_create
 from src.sales.repository import MasterSalesRepository
 from src.sales.schemas import (
     BestSellers,
-    CategorySales,
-    CouponSales,
-    GeoSales,
     SaleCreate,
     SaleEvent,
     SaleList,
+    SalesBreakdown,
     SalesFeed,
+    SalesGroupBy,
     SalesSeries,
     SalesSummary,
     SaleUpdate,
@@ -146,17 +145,11 @@ class SandboxSalesService:
         events = analytics.filter_sales(await self._events(session_id), **filters)  # type: ignore[arg-type]
         return analytics.timeseries(events, bucket=bucket)
 
-    async def by_category(self, session_id: str, **filters: object) -> CategorySales:
+    async def breakdown(
+        self, session_id: str, *, group_by: SalesGroupBy, **filters: object
+    ) -> SalesBreakdown:
         events = analytics.filter_sales(await self._events(session_id), **filters)  # type: ignore[arg-type]
-        return analytics.by_category(events)
-
-    async def by_coupon(self, session_id: str, **filters: object) -> CouponSales:
-        events = analytics.filter_sales(await self._events(session_id), **filters)  # type: ignore[arg-type]
-        return analytics.by_coupon(events)
-
-    async def by_geo(self, session_id: str, **filters: object) -> GeoSales:
-        events = analytics.filter_sales(await self._events(session_id), **filters)  # type: ignore[arg-type]
-        return analytics.by_geo(events)
+        return analytics.group_by(events, by=group_by)
 
     async def feed(
         self, session_id: str, *, since: datetime | None, limit: int
@@ -228,17 +221,11 @@ class MasterSalesService:
         events = analytics.filter_sales(await self._repo.list_all(), **filters)  # type: ignore[arg-type]
         return analytics.timeseries(events, bucket=bucket)
 
-    async def by_category(self, **filters: object) -> CategorySales:
+    async def breakdown(
+        self, *, group_by: SalesGroupBy, **filters: object
+    ) -> SalesBreakdown:
         events = analytics.filter_sales(await self._repo.list_all(), **filters)  # type: ignore[arg-type]
-        return analytics.by_category(events)
-
-    async def by_coupon(self, **filters: object) -> CouponSales:
-        events = analytics.filter_sales(await self._repo.list_all(), **filters)  # type: ignore[arg-type]
-        return analytics.by_coupon(events)
-
-    async def by_geo(self, **filters: object) -> GeoSales:
-        events = analytics.filter_sales(await self._repo.list_all(), **filters)  # type: ignore[arg-type]
-        return analytics.by_geo(events)
+        return analytics.group_by(events, by=group_by)
 
     async def feed(self, *, since: datetime | None, limit: int) -> SalesFeed:
         items = analytics.feed(await self._repo.list_all(), since=since, limit=limit)

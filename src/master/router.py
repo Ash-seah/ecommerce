@@ -14,17 +14,22 @@ from src.master.auth import (
     issue_access_token,
 )
 from src.master.schemas import (
+    CatalogResponse,
     CategoryCreate,
+    CategoryList,
     CategoryResponse,
     CategoryUpdate,
     LoginRequest,
     MediaResponse,
+    MediaUpdate,
     ProductCreate,
+    ProductList,
     ProductResponse,
     ProductUpdate,
     PublishResponse,
     TokenResponse,
     VariantCreate,
+    VariantList,
     VariantResponse,
     VariantUpdate,
 )
@@ -65,12 +70,30 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
     return TokenResponse(access_token=token, expires_in=settings.jwt_ttl_seconds)
 
 
-@router.post("/categories", response_model=CategoryResponse)
+@router.get("/catalog", response_model=CatalogResponse)
+async def get_catalog(request: Request, _admin: AdminUser) -> CatalogResponse:
+    return CatalogResponse(catalog=await _service(request).get_catalog())
+
+
+@router.get("/categories", response_model=CategoryList)
+async def list_categories(request: Request, _admin: AdminUser) -> CategoryList:
+    catalog = await _service(request).get_catalog()
+    return CategoryList(items=catalog.categories)
+
+
+@router.post("/categories", response_model=CategoryResponse, status_code=201)
 async def create_category(
     body: CategoryCreate, request: Request, _admin: AdminUser
 ) -> CategoryResponse:
     category = await _service(request).create_category(body)
     return CategoryResponse(category=category)
+
+
+@router.get("/categories/{category_id}", response_model=CategoryResponse)
+async def get_category(
+    category_id: UUID, request: Request, _admin: AdminUser
+) -> CategoryResponse:
+    return CategoryResponse(category=await _service(request).get_category(category_id))
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryResponse)
@@ -81,12 +104,50 @@ async def update_category(
     return CategoryResponse(category=category)
 
 
-@router.post("/products", response_model=ProductResponse)
+@router.delete("/categories/{category_id}", status_code=204)
+async def delete_category(category_id: UUID, request: Request, _admin: AdminUser) -> None:
+    await _service(request).delete_category(category_id)
+
+
+@router.post("/categories/{category_id}/media", response_model=MediaResponse, status_code=201)
+async def upload_category_media(
+    category_id: UUID,
+    request: Request,
+    _admin: AdminUser,
+    file: Annotated[UploadFile, File()],
+    alt_text: Annotated[str, Form(min_length=1, max_length=300)] = "Category image",
+    sort_order: Annotated[int, Form(ge=0)] = 0,
+    is_main: Annotated[bool, Form()] = False,
+) -> MediaResponse:
+    payload = await file.read()
+    media = await _service(request).attach_category_media(
+        category_id,
+        payload,
+        file.content_type,
+        alt_text,
+        sort_order,
+        is_main=is_main,
+    )
+    return MediaResponse(media=media)
+
+
+@router.get("/products", response_model=ProductList)
+async def list_products(request: Request, _admin: AdminUser) -> ProductList:
+    catalog = await _service(request).get_catalog()
+    return ProductList(items=catalog.products)
+
+
+@router.post("/products", response_model=ProductResponse, status_code=201)
 async def create_product(
     body: ProductCreate, request: Request, _admin: AdminUser
 ) -> ProductResponse:
     product = await _service(request).create_product(body)
     return ProductResponse(product=product)
+
+
+@router.get("/products/{product_id}", response_model=ProductResponse)
+async def get_product(product_id: UUID, request: Request, _admin: AdminUser) -> ProductResponse:
+    return ProductResponse(product=await _service(request).get_product(product_id))
 
 
 @router.patch("/products/{product_id}", response_model=ProductResponse)
@@ -97,12 +158,29 @@ async def update_product(
     return ProductResponse(product=product)
 
 
-@router.post("/variants", response_model=VariantResponse)
+@router.delete("/products/{product_id}", status_code=204)
+async def delete_product(product_id: UUID, request: Request, _admin: AdminUser) -> None:
+    await _service(request).delete_product(product_id)
+
+
+@router.get("/variants", response_model=VariantList)
+async def list_variants(request: Request, _admin: AdminUser) -> VariantList:
+    catalog = await _service(request).get_catalog()
+    items = tuple(variant for product in catalog.products for variant in product.variants)
+    return VariantList(items=items)
+
+
+@router.post("/variants", response_model=VariantResponse, status_code=201)
 async def create_variant(
     body: VariantCreate, request: Request, _admin: AdminUser
 ) -> VariantResponse:
     variant = await _service(request).create_variant(body)
     return VariantResponse(variant=variant)
+
+
+@router.get("/variants/{variant_id}", response_model=VariantResponse)
+async def get_variant(variant_id: UUID, request: Request, _admin: AdminUser) -> VariantResponse:
+    return VariantResponse(variant=await _service(request).get_variant(variant_id))
 
 
 @router.patch("/variants/{variant_id}", response_model=VariantResponse)
@@ -113,7 +191,12 @@ async def update_variant(
     return VariantResponse(variant=variant)
 
 
-@router.post("/products/{product_id}/media", response_model=MediaResponse)
+@router.delete("/variants/{variant_id}", status_code=204)
+async def delete_variant(variant_id: UUID, request: Request, _admin: AdminUser) -> None:
+    await _service(request).delete_variant(variant_id)
+
+
+@router.post("/products/{product_id}/media", response_model=MediaResponse, status_code=201)
 async def upload_product_media(
     product_id: UUID,
     request: Request,
@@ -135,7 +218,7 @@ async def upload_product_media(
     return MediaResponse(media=media)
 
 
-@router.post("/variants/{variant_id}/media", response_model=MediaResponse)
+@router.post("/variants/{variant_id}/media", response_model=MediaResponse, status_code=201)
 async def upload_variant_media(
     variant_id: UUID,
     request: Request,
@@ -154,6 +237,19 @@ async def upload_variant_media(
         sort_order,
         is_main=is_main,
     )
+    return MediaResponse(media=media)
+
+
+@router.get("/media/{media_id}", response_model=MediaResponse)
+async def get_media(media_id: UUID, request: Request, _admin: AdminUser) -> MediaResponse:
+    return MediaResponse(media=await _service(request).get_media(media_id))
+
+
+@router.patch("/media/{media_id}", response_model=MediaResponse)
+async def update_media(
+    media_id: UUID, body: MediaUpdate, request: Request, _admin: AdminUser
+) -> MediaResponse:
+    media = await _service(request).update_media(media_id, body)
     return MediaResponse(media=media)
 
 

@@ -9,13 +9,13 @@ from pydantic import AnyHttpUrl
 from test_sandbox_engine import service_fixture
 
 from src.commerce.router import router as commerce_router
+from src.commerce.delivery import default_delivery_catalog
 from src.commerce.service import (
     BasisPointTaxPolicy,
     CommerceError,
     CommerceLimits,
     CommerceService,
     DemoCouponPolicy,
-    FlatShippingPolicy,
     PricingService,
 )
 from src.core.config import get_settings
@@ -31,7 +31,12 @@ def commerce(sandbox: object, *, stock: int = 5) -> CommerceService:
         cast(SandboxService, sandbox),
         PricingService(
             coupon=DemoCouponPolicy(),
-            shipping=FlatShippingPolicy(flat_minor=0, free_threshold_minor=0),
+            delivery=default_delivery_catalog(
+                standard_minor=0,
+                express_minor=0,
+                pickup_minor=0,
+                free_threshold_minor=0,
+            ),
             tax_policy=BasisPointTaxPolicy(0),
         ),
         CommerceLimits(
@@ -94,6 +99,159 @@ async def test_catalog_filters_sort_and_availability_use_merged_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_units_sold_and_trending_products_use_sales() -> None:
+    sandbox, _redis, _secrets, master = await service_fixture()
+    service = commerce(sandbox, stock=10)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+    shipping = address()
+    await service.put_address(session_id, shipping)
+    await service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
+    await service.change_cart(session_id, product.variants[0].id, 3, add=False)
+    order = await service.checkout(
+        session_id, shipping.id, None, "trend-1", delivery_option_id="standard"
+    )
+    assert order.delivery_option_id == "standard"
+
+    view = await service.product(session_id, str(product.id))
+    assert view.units_sold == 3
+
+    page = await service.products(
+        session_id,
+        page=1,
+        page_size=10,
+        search=None,
+        category=None,
+        brand=None,
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="-sold",
+    )
+    assert page.items[0].id == product.id
+    assert page.items[0].units_sold == 3
+
+    trending = await service.trending_products(
+        session_id, page=1, page_size=10, window_days=7
+    )
+    assert trending.total == 1
+    assert trending.items[0].id == product.id
+    assert trending.items[0].units_sold == 3
+
+
+@pytest.mark.asyncio
+async def test_product_details_and_specifics_tags() -> None:
+    sandbox, _redis, _secrets, master = await service_fixture()
+    from src.admin.schemas import ProductInput
+    from src.admin.service import AdminService
+
+    admin = AdminService(sandbox, default_stock=5)
+    service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+    await admin.update_product(
+        session_id,
+        product.id,
+        ProductInput(
+            category_id=product.category_id,
+            name=product.name,
+            description=product.description,
+            details="Reinforced stitching and breathable lining.",
+            specifics=("Cotton", "Breathable", "Everyday wear"),
+        ),
+    )
+    view = await service.product(session_id, str(product.id))
+    assert view.details == "Reinforced stitching and breathable lining."
+    assert view.specifics == ("Cotton", "Breathable", "Everyday wear")
+
+    await admin.update_product(
+        session_id,
+        product.id,
+        ProductInput(
+            category_id=product.category_id,
+            name=product.name,
+            description=product.description,
+            details=view.details,
+            specifics=(*view.specifics, "Machine washable"),
+        ),
+    )
+    refreshed = await service.product(session_id, str(product.id))
+    assert refreshed.specifics == (
+        "Cotton",
+        "Breathable",
+        "Everyday wear",
+        "Machine washable",
+    )
+
+
+@pytest.mark.asyncio
+async def test_product_brand_field_and_filter() -> None:
+    sandbox, _redis, _secrets, master = await service_fixture()
+    from src.admin.schemas import ProductInput
+    from src.admin.service import AdminService
+
+    admin = AdminService(sandbox, default_stock=5)
+    service = commerce(sandbox, stock=5)
+    session_id, _nonce, _state = await sandbox.create()
+    product = master.products[0]
+    await admin.update_product(
+        session_id,
+        product.id,
+        ProductInput(
+            category_id=product.category_id,
+            brand="Acme Labs",
+            name=product.name,
+            description=product.description,
+        ),
+    )
+    view = await service.product(session_id, str(product.id))
+    assert view.brand == "Acme Labs"
+
+    matched = await service.products(
+        session_id,
+        page=1,
+        page_size=10,
+        search=None,
+        category=None,
+        brand="acme labs",
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="name",
+    )
+    assert matched.total == 1
+    assert matched.items[0].brand == "Acme Labs"
+
+    by_search = await service.products(
+        session_id,
+        page=1,
+        page_size=10,
+        search="acme",
+        category=None,
+        brand=None,
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="name",
+    )
+    assert by_search.total == 1
+
+    missing = await service.products(
+        session_id,
+        page=1,
+        page_size=10,
+        search=None,
+        category=None,
+        brand="Other",
+        min_price_minor=None,
+        max_price_minor=None,
+        available=None,
+        sort="name",
+    )
+    assert missing.total == 0
+
+
+@pytest.mark.asyncio
 async def test_product_discount_applies_before_coupon() -> None:
     sandbox, _redis, _secrets, master = await service_fixture()
     from src.admin.schemas import ProductInput
@@ -128,7 +286,7 @@ async def test_product_discount_applies_before_coupon() -> None:
     assert cart.lines[0].unit_price_minor == 65
     assert cart.subtotal_minor == 130
 
-    order = await service.checkout(session_id, shipping.id, "SAVE10", "sale-coupon")
+    order = await service.checkout(session_id, shipping.id, "SAVE10", "sale-coupon", delivery_option_id="standard")
     assert order.subtotal_minor == 130
     assert order.discount_minor == 13
     assert order.lines[0].unit_price_minor == 65
@@ -169,11 +327,11 @@ async def test_checkout_rejects_stock_and_funds_then_is_atomic_and_idempotent() 
         await service.change_cart(session_id, variant_id, 3, add=False)
     await service.change_cart(session_id, variant_id, 2, add=False)
     with pytest.raises(CommerceError, match="funds"):
-        await service.checkout(session_id, shipping.id, None, "funds-attempt")
+        await service.checkout(session_id, shipping.id, None, "funds-attempt", delivery_option_id="standard")
 
     await service.adjust_wallet(session_id, 1_000, "test credit", operation="credit")
     redis.conflicts = 1
-    order = await service.checkout(session_id, shipping.id, "SAVE10", "checkout-1")
+    order = await service.checkout(session_id, shipping.id, "SAVE10", "checkout-1", delivery_option_id="standard")
     state = await sandbox.inspect(session_id)
     assert order.total_minor == 180
     assert state.wallet.balance_minor == 820
@@ -183,7 +341,7 @@ async def test_checkout_rejects_stock_and_funds_then_is_atomic_and_idempotent() 
     assert state.cart.lines == []
     assert len(state.orders.orders) == 1
 
-    replay = await service.checkout(session_id, shipping.id, "SAVE10", "checkout-1")
+    replay = await service.checkout(session_id, shipping.id, "SAVE10", "checkout-1", delivery_option_id="standard")
     replay_state = await sandbox.inspect(session_id)
     assert replay.id == order.id
     assert replay_state.wallet.balance_minor == 820
@@ -202,7 +360,7 @@ async def test_order_cancellation_and_refund_compensate_once() -> None:
     await service.put_address(session_id, shipping)
     await service.adjust_wallet(session_id, 1_000, "credit", operation="credit")
     await service.change_cart(session_id, variant_id, 1, add=False)
-    order = await service.checkout(session_id, shipping.id, None, "cancel-me")
+    order = await service.checkout(session_id, shipping.id, None, "cancel-me", delivery_option_id="standard")
 
     cancelled = await service.transition_order(session_id, order.id, "cancel")
     state = await sandbox.inspect(session_id)
@@ -214,7 +372,7 @@ async def test_order_cancellation_and_refund_compensate_once() -> None:
         await service.transition_order(session_id, order.id, "refund")
 
     await service.change_cart(session_id, variant_id, 1, add=False)
-    second = await service.checkout(session_id, shipping.id, None, "refund-me")
+    second = await service.checkout(session_id, shipping.id, None, "refund-me", delivery_option_id="standard")
     refunded = await service.transition_order(session_id, second.id, "refund")
     assert refunded.status == "refunded"
 

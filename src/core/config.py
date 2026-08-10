@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     demo_wallet_currency: str = Field(default="IRR", pattern=r"^[A-Z]{3}$")
     demo_stock_default: int = Field(default=100, ge=0, le=1_000_000)
     shipping_flat_minor: int = Field(default=500, ge=0, le=1_000_000)
+    shipping_express_minor: int = Field(default=1_500, ge=0, le=1_000_000)
+    shipping_pickup_minor: int = Field(default=0, ge=0, le=1_000_000)
     free_shipping_threshold_minor: int = Field(default=5_000, ge=0, le=1_000_000_000)
     tax_basis_points: int = Field(default=0, ge=0, le=10_000)
 
@@ -122,6 +124,8 @@ class Settings(BaseSettings):
         "demo_wallet_initial_minor",
         "demo_stock_default",
         "shipping_flat_minor",
+        "shipping_express_minor",
+        "shipping_pickup_minor",
         "free_shipping_threshold_minor",
         "tax_basis_points",
         "jwt_ttl_seconds",

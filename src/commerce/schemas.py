@@ -6,10 +6,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.catalog.schemas import MediaSnapshot
+from src.reviews.schemas import StarCounts
 from src.sandbox.models import AddressRecord, OrderRecord, WalletLedgerEntry
 
 Minor = Annotated[int, Field(ge=0)]
 Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+Stars = Annotated[int, Field(ge=1, le=5)]
 
 
 class CommerceModel(BaseModel):
@@ -31,9 +33,12 @@ class VariantView(CommerceModel):
 class ProductView(CommerceModel):
     id: UUID
     category_id: UUID
+    brand: str | None = None
     slug: str
     name: str
     description: str | None
+    details: str | None = None
+    specifics: tuple[str, ...] = ()
     discount_percent: Minor
     variants: tuple[VariantView, ...]
     media: tuple[MediaSnapshot, ...]
@@ -42,6 +47,13 @@ class ProductView(CommerceModel):
     price_min_minor: Minor
     price_max_minor: Minor
     currency: Currency
+    average_rating: float | None = None
+    rating_count: Minor = 0
+    rounded_stars: Stars | None = None
+    star_counts: StarCounts = Field(default_factory=StarCounts)
+    can_review: bool = False
+    my_review_id: UUID | None = None
+    units_sold: Minor = 0
 
 
 class CategoryNode(CommerceModel):
@@ -52,7 +64,10 @@ class CategoryNode(CommerceModel):
     slug: str
     name: str
     description: str | None
+    color: str | None = None
+    accent_color: str | None = None
     sort_order: int
+    media: tuple[MediaSnapshot, ...] = ()
     children: tuple["CategoryNode", ...] = ()
 
 
@@ -178,6 +193,26 @@ class PricingBreakdown(CommerceModel):
     shipping_minor: Minor
     tax_minor: Minor
     total_minor: Minor
+    delivery_option_id: str
+    delivery_option_label: str
+
+
+class DeliveryOptionView(CommerceModel):
+    id: str
+    label: str
+    description: str
+    cost_minor: Minor
+    eta_min_days: Minor
+    eta_max_days: Minor
+    free_shipping_applied: bool = False
+
+
+class DeliveryOptionList(CommerceModel):
+    items: tuple[DeliveryOptionView, ...]
+    currency: Currency
+    subtotal_minor: Minor
+    discount_minor: Minor
+    free_shipping_threshold_minor: Minor
 
 
 class CheckoutRequest(BaseModel):
@@ -188,6 +223,7 @@ class CheckoutRequest(BaseModel):
             "examples": [
                 {
                     "address_id": "00000000-0000-4000-8000-000000000001",
+                    "delivery_option_id": "standard",
                     "coupon_code": "SAVE10",
                 }
             ]
@@ -195,6 +231,7 @@ class CheckoutRequest(BaseModel):
     )
 
     address_id: UUID
+    delivery_option_id: str = Field(min_length=1, max_length=40)
     coupon_code: str | None = Field(default=None, min_length=1, max_length=40)
 
 

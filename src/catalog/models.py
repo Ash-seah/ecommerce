@@ -18,7 +18,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -61,6 +61,14 @@ class Category(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("revision_id", "slug", name="uq_catalog_categories_revision_slug"),
         CheckConstraint("length(slug) > 0", name="ck_catalog_categories_slug_not_empty"),
+        CheckConstraint(
+            "color IS NULL OR color ~ '^#[0-9A-Fa-f]{6}$'",
+            name="ck_catalog_categories_color_hex",
+        ),
+        CheckConstraint(
+            "accent_color IS NULL OR accent_color ~ '^#[0-9A-Fa-f]{6}$'",
+            name="ck_catalog_categories_accent_color_hex",
+        ),
         Index("ix_catalog_categories_revision_active", "revision_id", "is_active"),
     )
 
@@ -74,11 +82,14 @@ class Category(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    color: Mapped[str | None] = mapped_column(String(7))
+    accent_color: Mapped[str | None] = mapped_column(String(7))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     revision: Mapped[CatalogRevision] = relationship(back_populates="categories")
     products: Mapped[list[Product]] = relationship(back_populates="category")
+    media: Mapped[list[MediaMetadata]] = relationship(back_populates="category")
 
 
 class Product(Base, TimestampMixin):
@@ -92,6 +103,7 @@ class Product(Base, TimestampMixin):
         ),
         Index("ix_catalog_products_revision_active", "revision_id", "is_active"),
         Index("ix_catalog_products_category", "category_id"),
+        Index("ix_catalog_products_brand", "brand"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -101,9 +113,14 @@ class Product(Base, TimestampMixin):
     category_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("catalog_categories.id", ondelete="RESTRICT"), nullable=False
     )
+    brand: Mapped[str | None] = mapped_column(String(120))
     slug: Mapped[str] = mapped_column(String(120), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[str | None] = mapped_column(Text)
+    specifics: Mapped[list[str]] = mapped_column(
+        ARRAY(String(80)), nullable=False, server_default="{}"
+    )
     discount_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
@@ -142,9 +159,30 @@ class ProductVariant(Base, TimestampMixin):
 class MediaMetadata(Base, TimestampMixin):
     __tablename__ = "catalog_media"
     __table_args__ = (
-        UniqueConstraint("product_id", "object_key", name="uq_catalog_media_product_object"),
         CheckConstraint("byte_size >= 0", name="ck_catalog_media_size_nonnegative"),
         CheckConstraint("sort_order >= 0", name="ck_catalog_media_sort_nonnegative"),
+        CheckConstraint(
+            "("
+            "category_id IS NOT NULL AND product_id IS NULL AND variant_id IS NULL"
+            ") OR ("
+            "category_id IS NULL AND product_id IS NOT NULL"
+            ")",
+            name="ck_catalog_media_owner",
+        ),
+        Index(
+            "uq_catalog_media_product_object",
+            "product_id",
+            "object_key",
+            unique=True,
+            postgresql_where=text("product_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_catalog_media_category_object",
+            "category_id",
+            "object_key",
+            unique=True,
+            postgresql_where=text("category_id IS NOT NULL"),
+        ),
         Index("ix_catalog_media_product_active", "product_id", "is_active"),
         Index(
             "ix_catalog_media_variant_active",
@@ -152,11 +190,20 @@ class MediaMetadata(Base, TimestampMixin):
             "is_active",
             postgresql_where=text("variant_id IS NOT NULL"),
         ),
+        Index(
+            "ix_catalog_media_category_active",
+            "category_id",
+            "is_active",
+            postgresql_where=text("category_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE")
+    )
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_categories.id", ondelete="CASCADE")
     )
     variant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("catalog_variants.id", ondelete="CASCADE")
@@ -169,5 +216,6 @@ class MediaMetadata(Base, TimestampMixin):
     is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    product: Mapped[Product] = relationship(back_populates="media")
+    product: Mapped[Product | None] = relationship(back_populates="media")
+    category: Mapped[Category | None] = relationship(back_populates="media")
     variant: Mapped[ProductVariant | None] = relationship(back_populates="media")

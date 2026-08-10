@@ -51,6 +51,8 @@ def install_exception_handlers(application: FastAPI) -> None:
     from src.infrastructure.minio import MediaError
     from src.master.auth import MasterAuthError
     from src.master.service import MasterError
+    from src.reviews.repository import MasterReviewsError
+    from src.reviews.service import ReviewsAdminError
     from src.sales.repository import MasterSalesError
     from src.sales.service import SalesAdminError
     from src.sandbox.router import SandboxAPIError
@@ -68,6 +70,8 @@ def install_exception_handlers(application: FastAPI) -> None:
         MasterSalesError,
         ViewsAdminError,
         MasterViewsError,
+        ReviewsAdminError,
+        MasterReviewsError,
     )
 
     @application.exception_handler(RequestValidationError)

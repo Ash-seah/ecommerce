@@ -7,7 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from src.catalog.models import CatalogRevision, MediaMetadata, Product, ProductVariant
+from src.catalog.models import (
+    CatalogRevision,
+    Category,
+    MediaMetadata,
+    Product,
+    ProductVariant,
+)
 from src.catalog.schemas import (
     CatalogSnapshot,
     CategorySnapshot,
@@ -75,7 +81,7 @@ class MasterCatalogRepository:
             select(CatalogRevision)
             .where(CatalogRevision.is_active.is_(True))
             .options(
-                selectinload(CatalogRevision.categories),
+                selectinload(CatalogRevision.categories).selectinload(Category.media),
                 selectinload(CatalogRevision.products)
                 .selectinload(Product.variants)
                 .selectinload(ProductVariant.media),
@@ -88,7 +94,18 @@ class MasterCatalogRepository:
             raise CatalogNotAvailableError("no active catalog revision")
 
         categories = tuple(
-            CategorySnapshot.model_validate(category)
+            CategorySnapshot(
+                id=category.id,
+                parent_id=category.parent_id,
+                slug=category.slug,
+                name=category.name,
+                description=category.description,
+                color=category.color,
+                accent_color=category.accent_color,
+                sort_order=category.sort_order,
+                is_active=category.is_active,
+                media=self._media_list(list(category.media)),
+            )
             for category in sorted(
                 revision.categories,
                 key=lambda item: (item.sort_order, item.slug, str(item.id)),
@@ -98,9 +115,12 @@ class MasterCatalogRepository:
             ProductSnapshot(
                 id=product.id,
                 category_id=product.category_id,
+                brand=product.brand,
                 slug=product.slug,
                 name=product.name,
                 description=product.description,
+                details=product.details,
+                specifics=tuple(product.specifics or ()),
                 discount_percent=product.discount_percent,
                 is_active=product.is_active,
                 variants=tuple(

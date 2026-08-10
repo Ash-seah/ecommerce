@@ -16,12 +16,12 @@ from src.admin.service import AdminService
 from src.catalog.cache import CatalogSnapshotCache
 from src.catalog.repository import MasterCatalogRepository
 from src.commerce.router import router as commerce_router
+from src.commerce.delivery import default_delivery_catalog
 from src.commerce.service import (
     BasisPointTaxPolicy,
     CommerceLimits,
     CommerceService,
     DemoCouponPolicy,
-    FlatShippingPolicy,
     PricingService,
 )
 from src.core.config import Settings, get_settings
@@ -32,6 +32,10 @@ from src.infrastructure.minio import MediaService, MinioProtocol
 from src.infrastructure.redis import RedisClient
 from src.master.router import router as master_router
 from src.master.service import MasterCatalogService
+from src.reviews.admin_router import router as admin_reviews_router
+from src.reviews.master_router import router as master_reviews_router
+from src.reviews.repository import MasterReviewsRepository
+from src.reviews.service import MasterReviewsService, SandboxReviewsService
 from src.sales.admin_router import router as admin_sales_router
 from src.sales.master_router import router as master_sales_router
 from src.sales.repository import MasterSalesRepository
@@ -101,12 +105,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     master_sales_repository = MasterSalesRepository(owner_database.session_factory)
     master_views_repository = MasterViewsRepository(owner_database.session_factory)
+    master_reviews_repository = MasterReviewsRepository(owner_database.session_factory)
     commerce_service = CommerceService(
         sandbox_service,
         PricingService(
             coupon=DemoCouponPolicy(),
-            shipping=FlatShippingPolicy(
-                flat_minor=resolved_settings.shipping_flat_minor,
+            delivery=default_delivery_catalog(
+                standard_minor=resolved_settings.shipping_flat_minor,
+                express_minor=resolved_settings.shipping_express_minor,
+                pickup_minor=resolved_settings.shipping_pickup_minor,
                 free_threshold_minor=resolved_settings.free_shipping_threshold_minor,
             ),
             tax_policy=BasisPointTaxPolicy(resolved_settings.tax_basis_points),
@@ -119,11 +126,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         master_sales=master_sales_repository,
         master_views=master_views_repository,
+        master_reviews=master_reviews_repository,
     )
     sandbox_sales_service = SandboxSalesService(sandbox_service)
     master_sales_service = MasterSalesService(master_sales_repository)
     sandbox_views_service = SandboxViewsService(sandbox_service)
     master_views_service = MasterViewsService(master_views_repository)
+    sandbox_reviews_service = SandboxReviewsService(sandbox_service)
+    master_reviews_service = MasterReviewsService(master_reviews_repository)
     master_service = MasterCatalogService(
         owner_database.session_factory,
         media_service,
@@ -175,6 +185,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "name": "master-views",
                 "description": "Durable cross-sandbox traffic ledger and super-admin analytics.",
             },
+            {
+                "name": "admin-reviews",
+                "description": "Sandbox product comments and ratings administration.",
+            },
+            {
+                "name": "master-reviews",
+                "description": "Durable product comments and ratings moderation.",
+            },
         ],
         root_path=resolved_settings.root_path,
         lifespan=lifespan,
@@ -195,6 +213,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.master_sales_service = master_sales_service
     application.state.sandbox_views_service = sandbox_views_service
     application.state.master_views_service = master_views_service
+    application.state.sandbox_reviews_service = sandbox_reviews_service
+    application.state.master_reviews_service = master_reviews_service
     application.state.started = False
     application.add_middleware(
         CORSMiddleware,
@@ -216,9 +236,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(admin_router)
     application.include_router(admin_sales_router)
     application.include_router(admin_views_router)
+    application.include_router(admin_reviews_router)
     application.include_router(master_router)
     application.include_router(master_sales_router)
     application.include_router(master_views_router)
+    application.include_router(master_reviews_router)
     install_exception_handlers(application)
 
     @application.get(

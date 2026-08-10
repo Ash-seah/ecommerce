@@ -14,6 +14,7 @@ from src.commerce.schemas import (
     CategoryNode,
     CategoryPage,
     CheckoutRequest,
+    DeliveryOptionList,
     LedgerPage,
     OrderPage,
     OrderTransitionRequest,
@@ -25,6 +26,12 @@ from src.commerce.schemas import (
     WishlistView,
 )
 from src.commerce.service import CommerceError, CommerceService
+from src.reviews.schemas import (
+    ReviewCreateRequest,
+    ReviewList,
+    ReviewResponse,
+    ReviewUpdate,
+)
 from src.sandbox.models import AddressRecord, OrderRecord
 from src.sandbox.router import SessionContext, _existing_context, _require_csrf
 from src.sandbox.service import CatalogUnavailableError
@@ -85,10 +92,19 @@ async def list_products(
     page_size: PageSize = 20,
     search: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
     category: Annotated[str | None, Query(min_length=1, max_length=120)] = None,
+    brand: Annotated[str | None, Query(min_length=1, max_length=120)] = None,
     min_price_minor: Annotated[int | None, Query(ge=0)] = None,
     max_price_minor: Annotated[int | None, Query(ge=0)] = None,
-    available: bool | None = None,
-    sort: Literal["name", "-name", "price", "-price"] = "name",
+    available: Annotated[
+        bool | None,
+        Query(description="If set, only products with matching in-stock availability"),
+    ] = None,
+    min_stars: Annotated[int | None, Query(ge=1, le=5)] = None,
+    max_stars: Annotated[int | None, Query(ge=1, le=5)] = None,
+    stars: Annotated[int | None, Query(ge=1, le=5)] = None,
+    sort: Literal[
+        "name", "-name", "price", "-price", "rating", "-rating", "sold", "-sold"
+    ] = "name",
 ) -> ProductPage:
     if (
         min_price_minor is not None
@@ -96,6 +112,8 @@ async def list_products(
         and min_price_minor > max_price_minor
     ):
         raise CommerceError(422, "invalid_price_range", "Minimum price exceeds maximum")
+    if min_stars is not None and max_stars is not None and min_stars > max_stars:
+        raise CommerceError(422, "invalid_star_range", "Minimum stars exceeds maximum")
     context = await _existing_context(request)
     return await _catalog_call(
         _service(request).products(
@@ -104,10 +122,34 @@ async def list_products(
             page_size=_bounded_page_size(request, page_size),
             search=search,
             category=category,
+            brand=brand,
             min_price_minor=min_price_minor,
             max_price_minor=max_price_minor,
             available=available,
+            min_stars=min_stars,
+            max_stars=max_stars,
+            stars=stars,
             sort=sort,
+        )
+    )
+
+
+@router.get("/catalog/products/trending", response_model=ProductPage)
+async def list_trending_products(
+    request: Request,
+    page: Page = 1,
+    page_size: PageSize = 20,
+    window_days: Annotated[int, Query(ge=1, le=365)] = 7,
+) -> ProductPage:
+    """Rank in-catalog products by recorded units sold in the recent sales window."""
+
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).trending_products(
+            context.session_id,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+            window_days=window_days,
         )
     )
 
@@ -116,6 +158,68 @@ async def list_products(
 async def get_product(request: Request, identifier: str) -> ProductView:
     context = await _existing_context(request)
     return await _catalog_call(_service(request).product(context.session_id, identifier))
+
+
+@router.get("/catalog/products/{identifier}/reviews", response_model=ReviewList)
+async def list_product_reviews(
+    request: Request,
+    identifier: str,
+    page: Page = 1,
+    page_size: PageSize = 20,
+    stars: Annotated[int | None, Query(ge=1, le=5)] = None,
+) -> ReviewList:
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).list_product_reviews(
+            context.session_id,
+            identifier,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+            stars=stars,
+        )
+    )
+
+
+@router.post(
+    "/catalog/products/{identifier}/reviews",
+    response_model=ReviewResponse,
+    status_code=201,
+)
+async def create_product_review(
+    identifier: str,
+    body: ReviewCreateRequest,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> ReviewResponse:
+    context = await _write_context(request, x_csrf_token)
+    review = await _catalog_call(
+        _service(request).create_product_review(context.session_id, identifier, body)
+    )
+    return ReviewResponse(review=review)
+
+
+@router.patch("/reviews/{review_id}", response_model=ReviewResponse)
+async def update_my_review(
+    review_id: UUID,
+    body: ReviewUpdate,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> ReviewResponse:
+    context = await _write_context(request, x_csrf_token)
+    review = await _service(request).update_product_review(
+        context.session_id, review_id, body
+    )
+    return ReviewResponse(review=review)
+
+
+@router.delete("/reviews/{review_id}", status_code=204)
+async def delete_my_review(
+    review_id: UUID,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> None:
+    context = await _write_context(request, x_csrf_token)
+    await _service(request).delete_product_review(context.session_id, review_id)
 
 
 @router.post("/traffic/events", response_model=ViewResponse, status_code=201)
@@ -295,6 +399,19 @@ async def adjust_wallet(
     return WalletView(balance_minor=state.wallet.balance_minor, currency=state.wallet.currency)
 
 
+@router.get("/checkout/delivery-options", response_model=DeliveryOptionList)
+async def list_delivery_options(
+    request: Request,
+    coupon_code: Annotated[str | None, Query(min_length=1, max_length=40)] = None,
+) -> DeliveryOptionList:
+    """List delivery options for the current cart before final payment."""
+
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).delivery_options(context.session_id, coupon_code=coupon_code)
+    )
+
+
 @router.post("/checkout", response_model=OrderRecord)
 async def checkout(
     body: CheckoutRequest,
@@ -304,7 +421,11 @@ async def checkout(
 ) -> OrderRecord:
     context = await _write_context(request, x_csrf_token)
     return await _service(request).checkout(
-        context.session_id, body.address_id, body.coupon_code, idempotency_key
+        context.session_id,
+        body.address_id,
+        body.coupon_code,
+        idempotency_key,
+        delivery_option_id=body.delivery_option_id,
     )
 
 
