@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from src.assistant.models import RagChunkRow  # noqa: F401
 from src.catalog.models import Base
 from src.core.config import get_settings
 

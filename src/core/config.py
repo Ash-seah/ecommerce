@@ -92,6 +92,22 @@ class Settings(BaseSettings):
     recs_association_limit: int = Field(default=12, ge=1, le=50)
     recs_personal_seed_products: int = Field(default=3, ge=1, le=10)
 
+    # Groq RAG assistant (remote embeddings + chat; no local models).
+    assistant_enabled: bool = True
+    assistant_worker_enabled: bool = True
+    assistant_worker_interval_seconds: int = Field(default=600, ge=60, le=86_400)
+    assistant_top_k: int = Field(default=8, ge=1, le=32)
+    assistant_embedding_dim: int = Field(default=768, ge=64, le=4096)
+    groq_api_key: SecretStr | None = None
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1",
+        min_length=12,
+        max_length=200,
+        pattern=r"^https://[A-Za-z0-9._:/-]+$",
+    )
+    groq_chat_model: str = Field(default="llama-3.1-8b-instant", min_length=3, max_length=80)
+    groq_embed_model: str = Field(default="nomic-embed-text-v1.5", min_length=3, max_length=80)
+
     # Master-catalog operator credentials (JWT). Password is stored plainly in .env.
     admin_username: str = Field(default="admin", min_length=1, max_length=64)
     admin_password: str = Field(default="admin123", min_length=1, max_length=128)
@@ -140,6 +156,9 @@ class Settings(BaseSettings):
         "recs_min_pair_support",
         "recs_association_limit",
         "recs_personal_seed_products",
+        "assistant_worker_interval_seconds",
+        "assistant_top_k",
+        "assistant_embedding_dim",
         mode="before",
     )
     @classmethod
@@ -150,7 +169,20 @@ class Settings(BaseSettings):
             return int(value)
         return value
 
-    @field_validator("minio_secure", "session_cookie_secure", mode="before")
+    @field_validator("groq_api_key", mode="before")
+    @classmethod
+    def empty_groq_key_is_none(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
+
+    @field_validator(
+        "minio_secure",
+        "session_cookie_secure",
+        "assistant_enabled",
+        "assistant_worker_enabled",
+        mode="before",
+    )
     @classmethod
     def parse_environment_boolean(cls, value: object) -> object:
         if isinstance(value, str):

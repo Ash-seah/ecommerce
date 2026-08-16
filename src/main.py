@@ -13,6 +13,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.admin.router import router as admin_router
 from src.admin.service import AdminService
+from src.assistant.groq import GroqClient
+from src.assistant.master_router import router as master_assistant_router
+from src.assistant.router import router as assistant_router
+from src.assistant.service import AssistantService
+from src.assistant.store import RagChunkRepository
+from src.assistant.worker import AssistantIndexWorker
 from src.catalog.cache import CatalogSnapshotCache
 from src.catalog.repository import MasterCatalogRepository
 from src.commerce.delivery import default_delivery_catalog
@@ -158,6 +164,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     master_views_service = MasterViewsService(master_views_repository)
     sandbox_reviews_service = SandboxReviewsService(sandbox_service)
     master_reviews_service = MasterReviewsService(master_reviews_repository)
+    groq_client: GroqClient | None = None
+    groq_key = (
+        resolved_settings.groq_api_key.get_secret_value()
+        if resolved_settings.groq_api_key is not None
+        else None
+    )
+    if groq_key:
+        groq_client = GroqClient(
+            api_key=groq_key,
+            base_url=resolved_settings.groq_base_url,
+            chat_model=resolved_settings.groq_chat_model,
+            embed_model=resolved_settings.groq_embed_model,
+        )
+    rag_chunks = RagChunkRepository(owner_database.session_factory)
+    assistant_service = AssistantService(
+        groq=groq_client,
+        chunks=rag_chunks,
+        catalog=catalog_repository,
+        sales=master_sales_repository,
+        views=master_views_repository,
+        reviews=master_reviews_repository,
+        top_k=resolved_settings.assistant_top_k,
+        enabled=resolved_settings.assistant_enabled,
+    )
+    assistant_worker = AssistantIndexWorker(
+        assistant_service,
+        interval_seconds=resolved_settings.assistant_worker_interval_seconds,
+    )
     master_service = MasterCatalogService(
         owner_database.session_factory,
         media_service,
@@ -167,20 +201,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.started = True
-        worker_task: asyncio.Task[None] | None = None
+        recs_task: asyncio.Task[None] | None = None
+        assistant_task: asyncio.Task[None] | None = None
         if resolved_settings.recs_worker_enabled:
-            worker_task = asyncio.create_task(
+            recs_task = asyncio.create_task(
                 recommendation_worker.run_forever(),
                 name="recommendations-worker",
+            )
+        if (
+            resolved_settings.assistant_enabled
+            and resolved_settings.assistant_worker_enabled
+            and groq_client is not None
+        ):
+            assistant_task = asyncio.create_task(
+                assistant_worker.run_forever(),
+                name="assistant-index-worker",
             )
         try:
             yield
         finally:
             app.state.started = False
-            if worker_task is not None:
-                worker_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await worker_task
+            for worker_task in (recs_task, assistant_task):
+                if worker_task is not None:
+                    worker_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await worker_task
+            if groq_client is not None:
+                await groq_client.close()
             await redis.close()
             await database.close()
             await owner_database.close()
@@ -233,6 +280,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "name": "master-reviews",
                 "description": "Durable product comments and ratings moderation.",
             },
+            {
+                "name": "assistant",
+                "description": "Session RAG chat streamed from Groq over pgvector chunks.",
+            },
+            {
+                "name": "master-assistant",
+                "description": "JWT RAG reindex and streaming chat over master data.",
+            },
         ],
         root_path=resolved_settings.root_path,
         lifespan=lifespan,
@@ -257,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.master_views_service = master_views_service
     application.state.sandbox_reviews_service = sandbox_reviews_service
     application.state.master_reviews_service = master_reviews_service
+    application.state.assistant_service = assistant_service
     application.state.started = False
     application.add_middleware(
         CORSMiddleware,
@@ -283,6 +339,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(master_sales_router)
     application.include_router(master_views_router)
     application.include_router(master_reviews_router)
+    application.include_router(assistant_router)
+    application.include_router(master_assistant_router)
     install_exception_handlers(application)
 
     @application.get(

@@ -47,6 +47,8 @@ def install_exception_handlers(application: FastAPI) -> None:
     """Install consistent application, framework, validation, and fallback handlers."""
 
     from src.admin.service import AdminError
+    from src.assistant.groq import GroqError
+    from src.assistant.service import AssistantError
     from src.commerce.service import CommerceError
     from src.infrastructure.minio import MediaError
     from src.master.auth import MasterAuthError
@@ -72,6 +74,8 @@ def install_exception_handlers(application: FastAPI) -> None:
         MasterViewsError,
         ReviewsAdminError,
         MasterReviewsError,
+        AssistantError,
+        GroqError,
     )
 
     @application.exception_handler(RequestValidationError)
