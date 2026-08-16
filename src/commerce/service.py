@@ -31,6 +31,8 @@ from src.commerce.schemas import (
     ProductView,
     VariantView,
 )
+from src.recommendations.scoring import IntentAction
+from src.recommendations.service import RecommendationService
 from src.reviews.capture import apply_review_update, review_from_create
 from src.reviews.eligibility import (
     existing_session_review,
@@ -212,6 +214,7 @@ class CommerceService:
         master_sales: MasterSalesRepository | None = None,
         master_views: MasterViewsRepository | None = None,
         master_reviews: MasterReviewsRepository | None = None,
+        recommendations: RecommendationService | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._pricing = pricing
@@ -219,6 +222,12 @@ class CommerceService:
         self._master_sales = master_sales
         self._master_views = master_views
         self._master_reviews = master_reviews
+        self._recommendations = recommendations
+
+    def _schedule_intent(self, product_id: UUID, action: IntentAction) -> None:
+        if self._recommendations is None:
+            return
+        self._recommendations.schedule_intent(product_id, action)
 
     async def _persist_view(self, session_id: str, event: ViewEvent) -> ViewEvent:
         def mutation(state: SandboxState) -> SandboxState:
@@ -230,6 +239,19 @@ class CommerceService:
         if self._master_views is not None:
             with suppress(Exception):
                 await self._master_views.insert_many([event])
+        if event.product_id is not None and event.status == "recorded":
+            action: IntentAction
+            if event.kind in {
+                "visit",
+                "product_view",
+                "category_view",
+                "listing_view",
+                "search",
+            }:
+                action = event.kind
+            else:
+                action = "product_view"
+            self._schedule_intent(event.product_id, action)
         return event
 
     async def record_view(
@@ -550,6 +572,116 @@ class CommerceService:
         items, total, pages = _page(views, page, page_size)
         return ProductPage(items=items, page=page, page_size=page_size, total=total, pages=pages)
 
+    async def similar_products(
+        self,
+        session_id: str,
+        identifier: str,
+        *,
+        page: int,
+        page_size: int,
+    ) -> ProductPage:
+        """Same-category products ranked by global buying-intent score."""
+
+        state, catalog = await self._state_catalog(session_id)
+        product = self._resolve_product(catalog, identifier)
+        if self._recommendations is None:
+            ids = [
+                item.id
+                for item in catalog.products
+                if item.id != product.id
+                and item.category_id == product.category_id
+                and item.variants
+            ]
+        else:
+            ids = await self._recommendations.similar_product_ids(
+                catalog,
+                product.id,
+                limit=max(page * page_size, page_size),
+            )
+        return await self._product_page_from_ids(
+            state, catalog, ids, page=page, page_size=page_size
+        )
+
+    async def cross_sell_products(
+        self,
+        session_id: str,
+        identifier: str,
+        *,
+        page: int,
+        page_size: int,
+    ) -> ProductPage:
+        """Frequently-bought-together neighbors with category-intent fallback."""
+
+        state, catalog = await self._state_catalog(session_id)
+        product = self._resolve_product(catalog, identifier)
+        if self._recommendations is None:
+            return await self.similar_products(
+                session_id, identifier, page=page, page_size=page_size
+            )
+        ids = await self._recommendations.cross_sell_product_ids(
+            catalog,
+            product.id,
+            limit=max(page * page_size, page_size),
+        )
+        return await self._product_page_from_ids(
+            state, catalog, ids, page=page, page_size=page_size
+        )
+
+    async def personal_recommendations(
+        self,
+        session_id: str,
+        *,
+        page: int,
+        page_size: int,
+    ) -> ProductPage:
+        """Session-based next-product recommendations; cold-start → trending."""
+
+        state, catalog = await self._state_catalog(session_id)
+        if self._recommendations is None:
+            return await self.trending_products(
+                session_id, page=page, page_size=page_size
+            )
+        ids = await self._recommendations.personal_product_ids(
+            state,
+            catalog,
+            limit=max(page * page_size, page_size),
+        )
+        if ids is None:
+            return await self.trending_products(
+                session_id, page=page, page_size=page_size
+            )
+        return await self._product_page_from_ids(
+            state, catalog, ids, page=page, page_size=page_size
+        )
+
+    async def _product_page_from_ids(
+        self,
+        state: SandboxState,
+        catalog: CatalogSnapshot,
+        product_ids: list[UUID],
+        *,
+        page: int,
+        page_size: int,
+    ) -> ProductPage:
+        by_id = {
+            product.id: product
+            for product in catalog.products
+            if product.variants and product.id in set(product_ids)
+        }
+        ordered = [by_id[product_id] for product_id in product_ids if product_id in by_id]
+        units_sold = await self._merged_units_sold(state)
+        views = [
+            self._product_view(
+                product,
+                state,
+                catalog=catalog,
+                units_sold=units_sold.get(product.id, 0),
+            )
+            for product in ordered
+        ]
+        items, total, pages = _page(views, page, page_size)
+        return ProductPage(items=items, page=page, page_size=page_size, total=total, pages=pages)
+
     async def product(self, session_id: str, identifier: str) -> ProductView:
         state, catalog = await self._state_catalog(session_id)
         units_sold = await self._merged_units_sold(state)
@@ -790,7 +922,12 @@ class CommerceService:
             return state.model_copy(update={"cart": state.cart.model_copy(update={"lines": lines})})
 
         state = await self._sandbox.mutate(session_id, mutation)
-        return self._cart_view(state, storefront_catalog(merge_catalog(master, state)))
+        catalog = storefront_catalog(merge_catalog(master, state))
+        if add:
+            item = self._variants(catalog).get(variant_id)
+            if item is not None:
+                self._schedule_intent(item[0].id, "cart_add")
+        return self._cart_view(state, catalog)
 
     async def remove_cart(self, session_id: str, variant_id: UUID) -> CartView:
         initial = await self._sandbox.inspect(session_id)
@@ -845,6 +982,8 @@ class CommerceService:
             )
 
         await self._sandbox.mutate(session_id, mutation)
+        if not remove:
+            self._schedule_intent(product_id, "wishlist_add")
         return await self.wishlist(session_id)
 
     async def clear_wishlist(self, session_id: str) -> tuple[ProductView, ...]:
@@ -1111,6 +1250,9 @@ class CommerceService:
             # Sandbox ledger wins; master fan-out is best-effort for the demo.
             with suppress(Exception):
                 await self._master_sales.insert_many(captured)
+        purchased: set[UUID] = {event.product_id for event in captured}
+        for product_id in purchased:
+            self._schedule_intent(product_id, "purchase")
         return result[-1]
 
     async def orders(

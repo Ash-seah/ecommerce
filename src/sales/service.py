@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from src.recommendations.service import RecommendationService
 from src.sales import analytics
 from src.sales.capture import apply_sale_update, sale_from_create
 from src.sales.repository import MasterSalesRepository
@@ -44,8 +45,13 @@ def _list_response(items: list[SaleEvent], page: int, page_size: int) -> SaleLis
 
 
 class SandboxSalesService:
-    def __init__(self, sandbox: SandboxService) -> None:
+    def __init__(
+        self,
+        sandbox: SandboxService,
+        recommendations: RecommendationService | None = None,
+    ) -> None:
         self._sandbox = sandbox
+        self._recommendations = recommendations
 
     async def _events(self, session_id: str) -> list[SaleEvent]:
         state = await self._sandbox.inspect(session_id)
@@ -95,6 +101,8 @@ class SandboxSalesService:
             return state.model_copy(update={"sales": sales})
 
         await self._sandbox.mutate(session_id, mutation)
+        if self._recommendations is not None:
+            self._recommendations.schedule_intent(event.product_id, "purchase")
         return event
 
     async def update(self, session_id: str, sale_id: UUID, body: SaleUpdate) -> SaleEvent:
@@ -162,8 +170,13 @@ class SandboxSalesService:
 
 
 class MasterSalesService:
-    def __init__(self, repository: MasterSalesRepository) -> None:
+    def __init__(
+        self,
+        repository: MasterSalesRepository,
+        recommendations: RecommendationService | None = None,
+    ) -> None:
         self._repo = repository
+        self._recommendations = recommendations
 
     async def list_sales(
         self,
@@ -196,7 +209,10 @@ class MasterSalesService:
         return await self._repo.get(sale_id)
 
     async def create(self, body: SaleCreate) -> SaleEvent:
-        return await self._repo.create(body)
+        event = await self._repo.create(body)
+        if self._recommendations is not None:
+            self._recommendations.schedule_intent(event.product_id, "purchase")
+        return event
 
     async def update(self, sale_id: UUID, body: SaleUpdate) -> SaleEvent:
         return await self._repo.update(sale_id, body)

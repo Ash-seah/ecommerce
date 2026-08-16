@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     free_shipping_threshold_minor: int = Field(default=5_000, ge=0, le=1_000_000_000)
     tax_basis_points: int = Field(default=0, ge=0, le=10_000)
 
+    # Lightweight recommendations (intent ZSET + association precompute).
+    recs_worker_enabled: bool = True
+    recs_worker_interval_seconds: int = Field(default=300, ge=30, le=86_400)
+    recs_min_pair_support: int = Field(default=2, ge=1, le=100)
+    recs_association_limit: int = Field(default=12, ge=1, le=50)
+    recs_personal_seed_products: int = Field(default=3, ge=1, le=10)
+
     # Master-catalog operator credentials (JWT). Password is stored plainly in .env.
     admin_username: str = Field(default="admin", min_length=1, max_length=64)
     admin_password: str = Field(default="admin123", min_length=1, max_length=128)
@@ -129,6 +136,10 @@ class Settings(BaseSettings):
         "free_shipping_threshold_minor",
         "tax_basis_points",
         "jwt_ttl_seconds",
+        "recs_worker_interval_seconds",
+        "recs_min_pair_support",
+        "recs_association_limit",
+        "recs_personal_seed_products",
         mode="before",
     )
     @classmethod

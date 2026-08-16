@@ -28,6 +28,23 @@ class RedisClient:
     async def expire(self, key: str, ttl: int) -> object:
         return await self.client.expire(key, ttl)
 
+    async def delete(self, *keys: str) -> int:
+        if not keys:
+            return 0
+        return int(await self.client.delete(*keys))
+
+    async def zincrby(self, key: str, amount: float, member: str) -> float:
+        return float(await self.client.zincrby(key, amount, member))
+
+    async def zrevrange(
+        self, key: str, start: int, end: int, *, withscores: bool = False
+    ) -> list[bytes | str] | list[tuple[bytes | str, float]]:
+        return await self.client.zrevrange(key, start, end, withscores=withscores)
+
+    async def zscore(self, key: str, member: str) -> float | None:
+        score = await self.client.zscore(key, member)
+        return None if score is None else float(score)
+
     def pipeline(self) -> Pipeline:
         return self.client.pipeline()
 

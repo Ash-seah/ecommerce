@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import cast
 
 from fastapi import FastAPI, Request
@@ -15,8 +15,8 @@ from src.admin.router import router as admin_router
 from src.admin.service import AdminService
 from src.catalog.cache import CatalogSnapshotCache
 from src.catalog.repository import MasterCatalogRepository
-from src.commerce.router import router as commerce_router
 from src.commerce.delivery import default_delivery_catalog
+from src.commerce.router import router as commerce_router
 from src.commerce.service import (
     BasisPointTaxPolicy,
     CommerceLimits,
@@ -32,6 +32,9 @@ from src.infrastructure.minio import MediaService, MinioProtocol
 from src.infrastructure.redis import RedisClient
 from src.master.router import router as master_router
 from src.master.service import MasterCatalogService
+from src.recommendations.service import RecommendationService
+from src.recommendations.store import RecommendationStore
+from src.recommendations.worker import RecommendationWorker
 from src.reviews.admin_router import router as admin_reviews_router
 from src.reviews.master_router import router as master_reviews_router
 from src.reviews.repository import MasterReviewsRepository
@@ -106,6 +109,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     master_sales_repository = MasterSalesRepository(owner_database.session_factory)
     master_views_repository = MasterViewsRepository(owner_database.session_factory)
     master_reviews_repository = MasterReviewsRepository(owner_database.session_factory)
+    recommendation_store = RecommendationStore(
+        redis, key_prefix=resolved_settings.redis_key_prefix
+    )
+    recommendation_service = RecommendationService(
+        recommendation_store,
+        association_limit=resolved_settings.recs_association_limit,
+        personal_seed_products=resolved_settings.recs_personal_seed_products,
+    )
+    recommendation_worker = RecommendationWorker(
+        recommendation_store,
+        load_sales=master_sales_repository.list_all,
+        load_views=master_views_repository.list_all,
+        min_support=resolved_settings.recs_min_pair_support,
+        association_limit=resolved_settings.recs_association_limit,
+        interval_seconds=resolved_settings.recs_worker_interval_seconds,
+    )
     commerce_service = CommerceService(
         sandbox_service,
         PricingService(
@@ -127,9 +146,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         master_sales=master_sales_repository,
         master_views=master_views_repository,
         master_reviews=master_reviews_repository,
+        recommendations=recommendation_service,
     )
-    sandbox_sales_service = SandboxSalesService(sandbox_service)
-    master_sales_service = MasterSalesService(master_sales_repository)
+    sandbox_sales_service = SandboxSalesService(
+        sandbox_service, recommendations=recommendation_service
+    )
+    master_sales_service = MasterSalesService(
+        master_sales_repository, recommendations=recommendation_service
+    )
     sandbox_views_service = SandboxViewsService(sandbox_service)
     master_views_service = MasterViewsService(master_views_repository)
     sandbox_reviews_service = SandboxReviewsService(sandbox_service)
@@ -143,10 +167,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.started = True
+        worker_task: asyncio.Task[None] | None = None
+        if resolved_settings.recs_worker_enabled:
+            worker_task = asyncio.create_task(
+                recommendation_worker.run_forever(),
+                name="recommendations-worker",
+            )
         try:
             yield
         finally:
             app.state.started = False
+            if worker_task is not None:
+                worker_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await worker_task
             await redis.close()
             await database.close()
             await owner_database.close()
@@ -163,7 +197,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"name": "health", "description": "Process liveness and dependency readiness."},
             {"name": "observability", "description": "Prometheus monitoring endpoint."},
             {"name": "sandbox", "description": "Anonymous sandbox lifecycle and merged catalog."},
-            {"name": "commerce", "description": "Session-local shopping and checkout workflows."},
+            {
+                "name": "commerce",
+                "description": (
+                    "Session-local shopping, checkout, and lightweight recommendations "
+                    "(similar, cross-sell, personal)."
+                ),
+            },
             {"name": "admin", "description": "Copy-on-write catalog administration."},
             {
                 "name": "master",
@@ -208,6 +248,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.admin_service = admin_service
     application.state.media_service = media_service
     application.state.commerce_service = commerce_service
+    application.state.recommendation_service = recommendation_service
+    application.state.recommendation_worker = recommendation_worker
     application.state.master_service = master_service
     application.state.sandbox_sales_service = sandbox_sales_service
     application.state.master_sales_service = master_sales_service

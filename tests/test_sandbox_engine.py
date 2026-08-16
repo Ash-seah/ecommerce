@@ -71,23 +71,58 @@ class FakeRedis:
         self.ttls: dict[str, int] = {}
         self.expire_calls: list[tuple[str, int]] = []
         self.conflicts = 0
+        self.zsets: dict[str, dict[str, float]] = {}
 
     async def get(self, key: str) -> bytes | str | None:
         return self.values.get(key)
 
-    async def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> object:
+    async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> object:
         if nx and key in self.values:
             return False
         self.values[key] = value
-        self.ttls[key] = ex
+        if ex is not None:
+            self.ttls[key] = ex
         return True
 
+    async def delete(self, *keys: str) -> int:
+        removed = 0
+        for key in keys:
+            if self.values.pop(key, None) is not None:
+                removed += 1
+            self.zsets.pop(key, None)
+            self.ttls.pop(key, None)
+        return removed
+
     async def expire(self, key: str, ttl: int) -> object:
-        if key not in self.values:
+        if key not in self.values and key not in self.zsets:
             return False
         self.expire_calls.append((key, ttl))
         self.ttls[key] = ttl
         return True
+
+    async def zincrby(self, key: str, amount: float, member: str) -> float:
+        bucket = self.zsets.setdefault(key, {})
+        bucket[member] = bucket.get(member, 0.0) + amount
+        return bucket[member]
+
+    async def zrevrange(
+        self, key: str, start: int, end: int, *, withscores: bool = False
+    ) -> list[str] | list[tuple[str, float]]:
+        bucket = self.zsets.get(key, {})
+        ranked = sorted(bucket.items(), key=lambda item: (-item[1], item[0]))
+        if end == -1:
+            sliced = ranked[start:]
+        else:
+            sliced = ranked[start : end + 1]
+        if withscores:
+            return [(member, score) for member, score in sliced]
+        return [member for member, _score in sliced]
+
+    async def zscore(self, key: str, member: str) -> float | None:
+        bucket = self.zsets.get(key)
+        if bucket is None or member not in bucket:
+            return None
+        return bucket[member]
 
     def pipeline(self) -> FakePipeline:
         return FakePipeline(self)

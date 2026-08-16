@@ -154,6 +154,64 @@ async def list_trending_products(
     )
 
 
+@router.get("/catalog/products/{identifier}/similar", response_model=ProductPage)
+async def list_similar_products(
+    request: Request,
+    identifier: str,
+    page: Page = 1,
+    page_size: PageSize = 20,
+) -> ProductPage:
+    """Same-category products ranked by buying-intent score."""
+
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).similar_products(
+            context.session_id,
+            identifier,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+        )
+    )
+
+
+@router.get("/catalog/products/{identifier}/cross-sell", response_model=ProductPage)
+async def list_cross_sell_products(
+    request: Request,
+    identifier: str,
+    page: Page = 1,
+    page_size: PageSize = 20,
+) -> ProductPage:
+    """Frequently bought together; falls back to similar products."""
+
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).cross_sell_products(
+            context.session_id,
+            identifier,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+        )
+    )
+
+
+@router.get("/recommendations/personal", response_model=ProductPage)
+async def list_personal_recommendations(
+    request: Request,
+    page: Page = 1,
+    page_size: PageSize = 20,
+) -> ProductPage:
+    """Session-based recommendations; cold start uses trending products."""
+
+    context = await _existing_context(request)
+    return await _catalog_call(
+        _service(request).personal_recommendations(
+            context.session_id,
+            page=page,
+            page_size=_bounded_page_size(request, page_size),
+        )
+    )
+
+
 @router.get("/catalog/products/{identifier}", response_model=ProductView)
 async def get_product(request: Request, identifier: str) -> ProductView:
     context = await _existing_context(request)

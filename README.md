@@ -44,6 +44,11 @@ Interactive OpenAPI is at <http://localhost:8001/docs>; the schema is
   credits/debits under `/v1/commerce/wallet/adjustments/{credit|debit}`.
 - Checkout and orders: `/v1/checkout`, `/v1/orders`, `/v1/orders/{id}`, and
   `/v1/orders/{id}/transition`.
+- Recommendations: `GET /v1/catalog/products/{id}/similar` (same category + intent
+  score), `GET /v1/catalog/products/{id}/cross-sell` (bought-together Redis lookup),
+  and `GET /v1/recommendations/personal` (session transitions; cold-start → trending).
+  Intent scores update asynchronously on views (+1), cart (+5), wishlist (+10), and
+  purchase (+25) into Redis ZSET `ecommerce:recs:intent`.
 - Sandbox admin: copy-on-write categories, products, variants, prices, inventory,
   active flags, coupons, media, and restore operations under `/v1/admin`.
 - Master admin (JWT): login at `POST /v1/master/auth/login`, then Bearer-protected
@@ -125,6 +130,7 @@ stable UUIDs and upserts, so rerunning it is safe. Equivalent host commands are:
 ```powershell
 alembic upgrade head
 python -m scripts.seed_master_catalog
+python -m scripts.seed_master_traffic
 python -m scripts.refresh_catalog_cache
 # Optional host scripts (stdlib HTTP; no project venv required). API must be running.
 # MASTER_API_BASE_URL=http://127.0.0.1:8001   # or https://host/api behind Nginx
