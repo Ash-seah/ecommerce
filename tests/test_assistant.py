@@ -92,3 +92,10 @@ def test_sse_format() -> None:
     assert line.startswith("event: delta\n")
     assert '"Hello"' in line
     assert line.endswith("\n\n")
+
+
+def test_text_search_boosts_analytics_for_bestsellers() -> None:
+    from src.assistant.store import _ANALYTICS_HINTS, _tokens
+
+    tokens = set(_tokens("what is my best selling product"))
+    assert tokens.intersection(_ANALYTICS_HINTS)

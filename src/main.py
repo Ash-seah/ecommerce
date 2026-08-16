@@ -13,7 +13,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.admin.router import router as admin_router
 from src.admin.service import AdminService
-from src.assistant.groq import GroqClient
+from src.assistant.groq import EmbeddingClient, GroqClient
 from src.assistant.master_router import router as master_assistant_router
 from src.assistant.router import router as assistant_router
 from src.assistant.service import AssistantService
@@ -165,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sandbox_reviews_service = SandboxReviewsService(sandbox_service)
     master_reviews_service = MasterReviewsService(master_reviews_repository)
     groq_client: GroqClient | None = None
+    embedder: EmbeddingClient | None = None
     groq_key = (
         resolved_settings.groq_api_key.get_secret_value()
         if resolved_settings.groq_api_key is not None
@@ -175,11 +176,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_key=groq_key,
             base_url=resolved_settings.groq_base_url,
             chat_model=resolved_settings.groq_chat_model,
-            embed_model=resolved_settings.groq_embed_model,
+        )
+    embed_key = (
+        resolved_settings.embedding_api_key.get_secret_value()
+        if resolved_settings.embedding_api_key is not None
+        else None
+    )
+    if embed_key:
+        embedder = EmbeddingClient(
+            api_key=embed_key,
+            base_url=resolved_settings.embedding_base_url,
+            model=resolved_settings.embedding_model,
         )
     rag_chunks = RagChunkRepository(owner_database.session_factory)
     assistant_service = AssistantService(
         groq=groq_client,
+        embedder=embedder,
         chunks=rag_chunks,
         catalog=catalog_repository,
         sales=master_sales_repository,
@@ -228,6 +240,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await worker_task
             if groq_client is not None:
                 await groq_client.close()
+            if embedder is not None:
+                await embedder.close()
             await redis.close()
             await database.close()
             await owner_database.close()

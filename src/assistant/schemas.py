@@ -45,6 +45,8 @@ class AssistantChatRequest(AssistantModel):
 class AssistantHealth(AssistantModel):
     enabled: bool
     groq_configured: bool
+    embeddings_configured: bool = False
+    retrieval_mode: str = "text"
     indexed_chunks: int
     pgvector: bool
 

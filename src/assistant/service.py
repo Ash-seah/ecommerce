@@ -11,7 +11,7 @@ from src.assistant.chunker import (
     documents_from_catalog,
     documents_from_reviews,
 )
-from src.assistant.groq import GroqClient
+from src.assistant.groq import EmbeddingClient, GroqClient
 from src.assistant.store import RagChunkRepository, RetrievedChunk
 from src.catalog.repository import CatalogNotAvailableError, MasterCatalogRepository
 from src.reviews.repository import MasterReviewsRepository
@@ -37,6 +37,7 @@ class AssistantService:
         self,
         *,
         groq: GroqClient | None,
+        embedder: EmbeddingClient | None,
         chunks: RagChunkRepository,
         catalog: MasterCatalogRepository,
         sales: MasterSalesRepository,
@@ -46,6 +47,7 @@ class AssistantService:
         enabled: bool,
     ) -> None:
         self._groq = groq
+        self._embedder = embedder
         self._chunks = chunks
         self._catalog = catalog
         self._sales = sales
@@ -57,16 +59,21 @@ class AssistantService:
     def configured(self) -> bool:
         return self._enabled and self._groq is not None
 
+    def retrieval_mode(self) -> str:
+        return "vector" if self._embedder is not None else "text"
+
     async def health(self) -> dict[str, object]:
         return {
             "enabled": self._enabled,
             "groq_configured": self._groq is not None,
+            "embeddings_configured": self._embedder is not None,
+            "retrieval_mode": self.retrieval_mode(),
             "indexed_chunks": await self._chunks.count(),
             "pgvector": await self._chunks.vector_available(),
         }
 
     async def reindex(self) -> dict[str, int]:
-        groq = self._require_groq()
+        self._require_groq()
         try:
             catalog = await self._catalog.get_active_snapshot()
         except CatalogNotAvailableError as exc:
@@ -90,14 +97,18 @@ class AssistantService:
                 continue
             batch.append(document)
             if len(batch) >= 16:
-                written += await self._embed_batch(groq, batch)
+                written += await self._write_batch(batch)
                 batch = []
         if batch:
-            written += await self._embed_batch(groq, batch)
+            written += await self._write_batch(batch)
         return {"documents": len(documents), "written": written, "skipped": skipped}
 
-    async def _embed_batch(self, groq: GroqClient, batch: list[RagDocument]) -> int:
-        vectors = await groq.embed([item.content for item in batch])
+    async def _write_batch(self, batch: list[RagDocument]) -> int:
+        vectors: list[list[float] | None]
+        if self._embedder is not None:
+            vectors = list(await self._embedder.embed([item.content for item in batch]))
+        else:
+            vectors = [None] * len(batch)
         for document, embedding in zip(batch, vectors, strict=True):
             await self._chunks.upsert(document, embedding)
         return len(batch)
@@ -113,8 +124,7 @@ class AssistantService:
         query = question.strip()
         if not query:
             raise AssistantError(422, "empty_question", "Question is required")
-        [query_vec] = await groq.embed([query])
-        retrieved = await self._chunks.search(query_vec, limit=self._top_k)
+        retrieved = await self._retrieve(query)
         if product_id is not None:
             retrieved = _prefer_product(retrieved, product_id)
         context = _format_context(retrieved)
@@ -130,14 +140,23 @@ class AssistantService:
         yield (
             "meta",
             {
+                "retrieval_mode": self.retrieval_mode(),
                 "sources": [
                     {"title": item.title, "source": item.source, "score": round(item.score, 4)}
                     for item in retrieved
-                ]
+                ],
             },
         )
         async for delta in groq.stream_chat(messages):
             yield ("delta", delta)
+
+    async def _retrieve(self, query: str) -> list[RetrievedChunk]:
+        if self._embedder is not None:
+            [query_vec] = await self._embedder.embed([query])
+            hits = await self._chunks.search_vector(query_vec, limit=self._top_k)
+            if hits:
+                return hits
+        return await self._chunks.search_text(query, limit=self._top_k)
 
     def _require_groq(self) -> GroqClient:
         if not self._enabled:

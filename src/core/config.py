@@ -92,7 +92,8 @@ class Settings(BaseSettings):
     recs_association_limit: int = Field(default=12, ge=1, le=50)
     recs_personal_seed_products: int = Field(default=3, ge=1, le=10)
 
-    # Groq RAG assistant (remote embeddings + chat; no local models).
+    # Groq chat assistant. Retrieval defaults to Postgres text search because
+    # current Groq accounts no longer expose embedding models.
     assistant_enabled: bool = True
     assistant_worker_enabled: bool = True
     assistant_worker_interval_seconds: int = Field(default=600, ge=60, le=86_400)
@@ -106,8 +107,15 @@ class Settings(BaseSettings):
         pattern=r"^https://[A-Za-z0-9._:/-]+$",
     )
     groq_chat_model: str = Field(default="llama-3.1-8b-instant", min_length=3, max_length=80)
-    # Groq's published id uses an underscore (v1_5), not a dot.
-    groq_embed_model: str = Field(default="nomic-embed-text-v1_5", min_length=3, max_length=80)
+    # Optional separate OpenAI-compatible embedder (OpenAI, Voyage, etc.). Leave empty for text RAG.
+    embedding_api_key: SecretStr | None = None
+    embedding_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        min_length=12,
+        max_length=200,
+        pattern=r"^https://[A-Za-z0-9._:/-]+$",
+    )
+    embedding_model: str = Field(default="text-embedding-3-small", min_length=3, max_length=80)
 
     # Master-catalog operator credentials (JWT). Password is stored plainly in .env.
     admin_username: str = Field(default="admin", min_length=1, max_length=64)
@@ -170,24 +178,19 @@ class Settings(BaseSettings):
             return int(value)
         return value
 
-    @field_validator("groq_api_key", mode="before")
+    @field_validator("groq_api_key", "embedding_api_key", mode="before")
     @classmethod
-    def empty_groq_key_is_none(cls, value: object) -> object:
+    def empty_optional_secrets_are_none(cls, value: object) -> object:
         if value is None or value == "":
             return None
         return value
 
-    @field_validator("groq_chat_model", "groq_embed_model", mode="before")
+    @field_validator("groq_chat_model", "embedding_model", mode="before")
     @classmethod
-    def normalize_groq_model_ids(cls, value: object) -> object:
-        if not isinstance(value, str):
-            return value
-        cleaned = value.strip()
-        aliases = {
-            "nomic-embed-text-v1.5": "nomic-embed-text-v1_5",
-            "nomic-embed-text-v1_5": "nomic-embed-text-v1_5",
-        }
-        return aliases.get(cleaned, cleaned)
+    def strip_model_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @field_validator(
         "minio_secure",

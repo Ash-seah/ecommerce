@@ -49,10 +49,11 @@ Interactive OpenAPI is at <http://localhost:8001/docs>; the schema is
   and `GET /v1/recommendations/personal` (session transitions; cold-start → trending).
   Intent scores update asynchronously on views (+1), cart (+5), wishlist (+10), and
   purchase (+25) into Redis ZSET `ecommerce:recs:intent`.
-- Assistant (Groq RAG, SSE): `GET /v1/assistant/health`, `POST /v1/assistant/chat`
-  (session + CSRF, `text/event-stream`). Operator: `POST /v1/master/assistant/reindex`
-  and `POST /v1/master/assistant/chat` (JWT). Embeddings and chat are remote Groq
-  calls; chunks sit in `rag_chunks` (float[] plus optional pgvector `embedding_vec`).
+- Assistant (Groq SSE chat): `GET /v1/assistant/health`, `POST /v1/assistant/chat`
+  (session + CSRF). Operator: `POST /v1/master/assistant/reindex` and
+  `POST /v1/master/assistant/chat` (JWT). Chat uses Groq; retrieval defaults to
+  Postgres text search over `rag_chunks` because Groq currently has no embedding
+  models. Optional `EMBEDDING_API_KEY` enables remote vector RAG / pgvector.
 - Sandbox admin: copy-on-write categories, products, variants, prices, inventory,
   active flags, coupons, media, and restore operations under `/v1/admin`.
 - Master admin (JWT): login at `POST /v1/master/auth/login`, then Bearer-protected

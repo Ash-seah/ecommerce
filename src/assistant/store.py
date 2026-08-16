@@ -1,7 +1,8 @@
-"""Persist and retrieve RAG chunks (pgvector when available, cosine fallback)."""
+"""Persist and retrieve RAG chunks (text search default; vectors optional)."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from math import sqrt
 from uuid import uuid4
@@ -11,6 +12,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.assistant.chunker import RagDocument
 from src.assistant.models import RagChunkRow
+
+_ANALYTICS_HINTS = frozenset(
+    {
+        "best",
+        "bestseller",
+        "bestsellers",
+        "bestselling",
+        "sold",
+        "sales",
+        "revenue",
+        "popular",
+        "top",
+        "trending",
+        "traffic",
+        "views",
+        "visit",
+        "orders",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +51,10 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     if norm_left == 0 or norm_right == 0:
         return 0.0
     return dot / (norm_left * norm_right)
+
+
+def _tokens(query: str) -> list[str]:
+    return [token for token in re.findall(r"[a-z0-9]{2,}", query.casefold()) if token]
 
 
 class RagChunkRepository:
@@ -60,7 +84,8 @@ class RagChunkRepository:
         self._vector_ready = bool(exists)
         return self._vector_ready
 
-    async def upsert(self, document: RagDocument, embedding: list[float]) -> None:
+    async def upsert(self, document: RagDocument, embedding: list[float] | None = None) -> None:
+        vector = list(embedding or [])
         async with self._sessions.begin() as session:
             row = await session.scalar(
                 select(RagChunkRow).where(
@@ -76,7 +101,7 @@ class RagChunkRepository:
                     title=document.title,
                     content=document.content,
                     content_sha256=document.content_sha256,
-                    embedding=embedding,
+                    embedding=vector,
                     product_id=document.product_id,
                 )
                 session.add(row)
@@ -84,11 +109,11 @@ class RagChunkRepository:
                 row.title = document.title
                 row.content = document.content
                 row.content_sha256 = document.content_sha256
-                row.embedding = embedding
+                row.embedding = vector
                 row.product_id = document.product_id
             await session.flush()
-        if await self.vector_available():
-            literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
+        if vector and await self.vector_available():
+            literal = "[" + ",".join(f"{value:.8f}" for value in vector) + "]"
             try:
                 async with self._sessions.begin() as session:
                     await session.execute(
@@ -117,11 +142,73 @@ class RagChunkRepository:
             ).all()
         return {(str(source), str(ref_id)): str(digest) for source, ref_id, digest in rows}
 
-    async def search(
+    async def search_text(self, query: str, *, limit: int) -> list[RetrievedChunk]:
+        tokens = _tokens(query)
+        analytics_boost = bool(_ANALYTICS_HINTS.intersection(tokens))
+        async with self._sessions() as session:
+            rows = (await session.scalars(select(RagChunkRow))).all()
+        ranked: list[RetrievedChunk] = []
+        for row in rows:
+            haystack = f"{row.title}\n{row.content}".casefold()
+            score = 0.0
+            if not tokens:
+                score = 0.1
+            else:
+                hits = sum(1 for token in tokens if token in haystack)
+                score = hits / len(tokens)
+            if analytics_boost and row.source == "analytics":
+                score += 1.5
+            if score <= 0:
+                continue
+            ranked.append(
+                RetrievedChunk(
+                    title=row.title,
+                    content=row.content,
+                    source=row.source,
+                    ref_id=row.ref_id,
+                    score=score,
+                )
+            )
+        ranked.sort(key=lambda item: (-item.score, item.source, item.ref_id))
+        if ranked:
+            return ranked[:limit]
+        # Cold corpus fallback: still return analytics + a few catalog rows.
+        fallback = [
+            RetrievedChunk(
+                title=row.title,
+                content=row.content,
+                source=row.source,
+                ref_id=row.ref_id,
+                score=1.0 if row.source == "analytics" else 0.1,
+            )
+            for row in rows
+            if row.source == "analytics"
+        ]
+        if len(fallback) < limit:
+            for row in rows:
+                if row.source == "analytics":
+                    continue
+                fallback.append(
+                    RetrievedChunk(
+                        title=row.title,
+                        content=row.content,
+                        source=row.source,
+                        ref_id=row.ref_id,
+                        score=0.05,
+                    )
+                )
+                if len(fallback) >= limit:
+                    break
+        return fallback[:limit]
+
+    async def search_vector(
         self, query_embedding: list[float], *, limit: int
     ) -> list[RetrievedChunk]:
-        if await self.vector_available():
-            return await self._search_vector(query_embedding, limit=limit)
+        if await self.vector_available() and any(query_embedding):
+            try:
+                return await self._search_vector(query_embedding, limit=limit)
+            except Exception:
+                self._vector_ready = False
         return await self._search_python(query_embedding, limit=limit)
 
     async def _search_vector(
@@ -169,6 +256,7 @@ class RagChunkRepository:
                     score=cosine_similarity(query_embedding, list(row.embedding or [])),
                 )
                 for row in rows
+                if row.embedding
             ),
             key=lambda item: item.score,
             reverse=True,
