@@ -106,7 +106,8 @@ class Settings(BaseSettings):
         pattern=r"^https://[A-Za-z0-9._:/-]+$",
     )
     groq_chat_model: str = Field(default="llama-3.1-8b-instant", min_length=3, max_length=80)
-    groq_embed_model: str = Field(default="nomic-embed-text-v1.5", min_length=3, max_length=80)
+    # Groq's published id uses an underscore (v1_5), not a dot.
+    groq_embed_model: str = Field(default="nomic-embed-text-v1_5", min_length=3, max_length=80)
 
     # Master-catalog operator credentials (JWT). Password is stored plainly in .env.
     admin_username: str = Field(default="admin", min_length=1, max_length=64)
@@ -175,6 +176,18 @@ class Settings(BaseSettings):
         if value is None or value == "":
             return None
         return value
+
+    @field_validator("groq_chat_model", "groq_embed_model", mode="before")
+    @classmethod
+    def normalize_groq_model_ids(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        aliases = {
+            "nomic-embed-text-v1.5": "nomic-embed-text-v1_5",
+            "nomic-embed-text-v1_5": "nomic-embed-text-v1_5",
+        }
+        return aliases.get(cleaned, cleaned)
 
     @field_validator(
         "minio_secure",

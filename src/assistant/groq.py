@@ -26,8 +26,10 @@ class GroqClient:
         embed_model: str,
         timeout_seconds: float = 45.0,
     ) -> None:
-        self._chat_model = chat_model
-        self._embed_model = embed_model
+        self._chat_model = chat_model.strip()
+        self._embed_model = embed_model.strip()
+        aliases = {"nomic-embed-text-v1.5": "nomic-embed-text-v1_5"}
+        self._embed_model = aliases.get(self._embed_model, self._embed_model)
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={
@@ -45,13 +47,21 @@ class GroqClient:
             return []
         response = await self._client.post(
             "/embeddings",
-            json={"model": self._embed_model, "input": texts, "encoding_format": "float"},
+            json={
+                "model": self._embed_model,
+                "input": texts,
+                "encoding_format": "float",
+            },
         )
         if response.status_code >= 400:
+            detail = _safe_error_detail(response)
             raise GroqError(
                 502,
                 "embed_failed",
-                f"Groq embeddings failed with HTTP {response.status_code}",
+                (
+                    f"Groq embeddings failed with HTTP {response.status_code} "
+                    f"(model={self._embed_model}): {detail}"
+                ),
             )
         payload = response.json()
         rows = sorted(payload.get("data") or [], key=lambda item: int(item.get("index", 0)))
@@ -74,11 +84,14 @@ class GroqClient:
             },
         ) as response:
             if response.status_code >= 400:
-                await response.aread()
+                body = (await response.aread()).decode(errors="replace")[:400]
                 raise GroqError(
                     502,
                     "chat_failed",
-                    f"Groq chat failed with HTTP {response.status_code}",
+                    (
+                        f"Groq chat failed with HTTP {response.status_code} "
+                        f"(model={self._chat_model}): {body or 'no body'}"
+                    ),
                 )
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
@@ -96,3 +109,21 @@ class GroqClient:
                 delta = (choices[0].get("delta") or {}).get("content")
                 if isinstance(delta, str) and delta:
                     yield delta
+
+
+def _safe_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        text = response.text.strip()
+        return text[:400] if text else "no body"
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()[:400]
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:400]
+    return str(payload)[:400]
